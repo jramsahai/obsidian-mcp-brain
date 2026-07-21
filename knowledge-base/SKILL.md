@@ -17,8 +17,7 @@ Use this skill for the user's personal knowledge base: factual, evergreen, or re
 
 - Use `second-brain` for shared vault location, routing, frontmatter, and linking conventions.
 - Use `nightly-consolidation` for the nightly pass; this skill's review workflow below is the KB-specific portion of that pass.
-- Use the Obsidian CLI as the primary way to search, read, create, append, move, inspect backlinks, and update notes.
-- Use direct Markdown edits only when restructuring file contents is clearer than CLI operations.
+- Use the Obsidian CLI for search, read, move, backlinks, and properties. Write note bodies (create, multi-line append) via direct file write — CLI `content=` args with multi-line/escaped text force an exec approval (see `second-brain` -> Vault).
 
 ## Vault Area
 

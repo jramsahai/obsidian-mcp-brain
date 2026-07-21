@@ -24,8 +24,9 @@ Single source of truth for vault config. Edit these values for your setup; the o
 - If your vault is named differently, substitute the name in every `vault=` argument shown across these skills.
 - Use command order: `/usr/local/bin/obsidian <command> vault="Obsidian Vault" ...`
 - CLI `file=`/`path=` arguments are vault-relative. Never pass an absolute filesystem path — the CLI treats it as relative and silently creates a nested `Users/...` mirror tree inside the vault.
-- Prefer the Obsidian CLI for search, read, create, append, move, properties, links, tags, and backlinks.
-- Fall back to direct file operations only when the CLI is unavailable after the recovery steps below, or when restructuring file contents is awkward through CLI commands.
+- Prefer the Obsidian CLI for search, read, move, rename, properties, links, tags, and backlinks — operations whose arguments are simple paths and queries that pass exec approval cleanly.
+- Write note bodies with the native file write/edit tools directly under `~/Documents/Obsidian Vault/` — never as a CLI `content=` argument. Multi-line or escaped content (`\n`/`\u{A}` escapes, `$`, backticks, backslashes) trips OpenClaw's dynamic-argument detection and forces a manual exec approval every time, even though the CLI binary is allowlisted. This covers `create` and any multi-line `append`/`prepend`. Obsidian picks up filesystem changes automatically. Exception: a short single-line plain-text `append`/`prepend` (e.g. an Inbox capture line) is fine via CLI.
+- Shell file fallback (`cat`, `ls`) only when the CLI is unreachable after the recovery steps below.
 
 ### CLI Errors Are Authoritative
 
@@ -69,7 +70,7 @@ Routine second-brain work can use the approved Obsidian CLI path without asking 
 
 - Inspecting vault state: `version`, `vault`, `vaults`, `files`, `folders`, `read`, `search`, `search:context`, `outline`, `wordcount`.
 - Inspecting note relationships: `tags`, `aliases`, `links`, `backlinks`, `unresolved`, `orphans`, `deadends`, `properties`, `property:read`.
-- Managing normal notes: `create`, `append`, `prepend`, `move`, `rename`, `property:set`, `property:remove`, and normal `daily:*` note operations.
+- Managing normal notes: `move`, `rename`, `property:set`, `property:remove`, normal `daily:*` note operations, short single-line `append`/`prepend`, and direct file writes/edits of note bodies (see Vault rules).
 - Managing tasks through Obsidian's task commands when the user's intent is explicit.
 
 Ask the user before destructive, app-level, or code-execution operations:
@@ -79,7 +80,7 @@ Ask the user before destructive, app-level, or code-execution operations:
 - Restricted mode changes.
 - `sync:restore`, `history:restore`, `restart`, developer/debug commands, or arbitrary `eval`.
 
-Prefer direct Markdown file edits only when they are clearer than CLI operations. Direct writes under `~/Documents/Obsidian Vault/` may need separate filesystem permission, so use the CLI first for routine capture and updates.
+Direct Markdown writes/edits under `~/Documents/Obsidian Vault/` via the native file tools need no exec approval and are the default for note bodies. CLI `content=` arguments carrying multi-line or escaped text force a manual exec approval — avoid them (see Vault).
 
 ## Vault Structure
 
@@ -128,7 +129,7 @@ When touching an existing note that lacks frontmatter, add it. Use `property:set
 
 ## Writing Into Notes
 
-CLI `append`/`prepend` operate on the whole file. That is correct for flat list files (`Inbox.md`, `Shopping/*.md`, `Knowledge Base/Inbox.md`) and for adding a brand-new section at the end of a note. It is wrong for adding content under an existing heading of a templated note (daily sections, `## Conversation History` tables, `## Pending Topics`, `## Related`) — file-level append dumps the content after the last section instead. For section-targeted additions: read the note, then edit it so the new line lands at the end of the correct section.
+CLI `append`/`prepend` operate on the whole file. That is correct for short single-line additions to flat list files (`Inbox.md`, `Shopping/*.md`, `Knowledge Base/Inbox.md`); multi-line additions (e.g. a brand-new section at the end of a note) go through direct file edit instead — multi-line `content=` args force an exec approval (see Vault). File-level append is wrong for adding content under an existing heading of a templated note (daily sections, `## Conversation History` tables, `## Pending Topics`, `## Related`) — file-level append dumps the content after the last section instead. For section-targeted additions: read the note, then edit it so the new line lands at the end of the correct section.
 
 ## Linking Rules (Wikilinks First)
 
