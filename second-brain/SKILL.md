@@ -19,7 +19,8 @@ Single source of truth for vault config. Edit these values for your setup; the o
 - Vault path: `~/Documents/Obsidian Vault/`
 - CLI: `/usr/local/bin/obsidian` (obsidian-cli talking to the running Obsidian app)
 - Local timezone: `America/New_York` (used for daily notes and date defaults)
-- The vault is a git repository (branch `main`). Git is the recovery mechanism for machine edits — prefer `git -C "~/Documents/Obsidian Vault"` inspection/revert over `sync:restore` or `history:restore`. Automated passes snapshot before and after edits (see `nightly-consolidation`). Run git commands one at a time; never chain with `&&`.
+- The vault is a git repository (branch `main`). Git is the recovery mechanism for machine edits — prefer `/usr/bin/git -C "/Users/you/Documents/Obsidian Vault"` inspection/revert over `sync:restore` or `history:restore`. Automated passes snapshot before and after edits (see `nightly-consolidation`). Run git commands one at a time; never chain with `&&`.
+- Invoke every binary by absolute path: `/usr/bin/git`, `/usr/local/bin/obsidian`, `/bin/cat`, `/bin/ls`. A bare command name (`git`, `cat`) does not match the exec allowlist and is denied outright. Do not pass the vault path as `~/Documents/Obsidian\ Vault` — use the quoted absolute form `"/Users/you/Documents/Obsidian Vault"`.
 - Always pass `vault="Obsidian Vault"` to Obsidian CLI commands.
 - If your vault is named differently, substitute the name in every `vault=` argument shown across these skills.
 - Use command order: `/usr/local/bin/obsidian <command> vault="Obsidian Vault" ...`
@@ -43,9 +44,9 @@ The CLI talks to the running Obsidian app. `Vault not found` means the vault win
 
 ### Fallback Hygiene
 
-Direct-file fallback commands go through OpenClaw's exec approval. Allowlisted binaries auto-run only for simple invocations — redirects (`2>/dev/null`), pipes (`| head`), and globs (`*.md`) each force a manual approval prompt. In fallback mode:
+Direct-file fallback commands go through OpenClaw's exec approval. Allowlisted binaries auto-run only for simple invocations — redirects (`2>/dev/null`), pipes (`| head`), and globs (`*.md`) each force a manual approval prompt. In non-interactive runs (cron) there is nobody to approve, so a prompt is a hard denial. In fallback mode:
 
-- Use bare commands only: `cat "<absolute path>"`, `ls -lt "<dir>"`. Plain `cat` and `ls` are typically allowlisted and run without prompting.
+- Always use the absolute binary path with no shell decoration: `/bin/cat "<absolute path>"`, `/bin/ls -lt "<dir>"`. A bare `cat` or `ls` may miss the allowlist and be denied.
 - No redirects of any kind — `2>&1` and `2>/dev/null` both count and force a prompt. Errors surface fine without them; never add one to capture stderr.
 - Never chain with `&&` or `;`, never pipe, never glob (`*.md`) — list the directory first, then read explicit paths.
 - Prefer native file read/list tools over shell when available.

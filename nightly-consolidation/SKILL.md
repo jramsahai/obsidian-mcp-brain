@@ -32,18 +32,18 @@ Use `second-brain` for vault conventions, frontmatter standards, linking rules, 
 
 ## Git Snapshots (required around writes)
 
-The vault is a git repo (see `second-brain` -> Vault); these snapshots are the undo story for machine edits. Run each git command separately — no `&&`, pipes, or redirects.
+The vault is a git repo (see `second-brain` -> Vault); these snapshots are the undo story for machine edits. Run each git command separately — no `&&`, pipes, or redirects. Always invoke git by absolute path `/usr/bin/git` — a bare `git` misses the exec allowlist and is denied.
 
 Before the first write of a run:
 
-1. `git -C "<vault path>" status --porcelain` — if it lists changes, snapshot the user's state first:
-2. `git -C "<vault path>" add -A`
-3. `git -C "<vault path>" commit -m "pre-consolidation snapshot YYYY-MM-DD"`
+1. `/usr/bin/git -C "<vault path>" status --porcelain` — if it lists changes, snapshot the user's state first:
+2. `/usr/bin/git -C "<vault path>" add -A`
+3. `/usr/bin/git -C "<vault path>" commit -m "pre-consolidation snapshot YYYY-MM-DD"`
 
 After the run's last write:
 
-1. `git -C "<vault path>" add -A`
-2. `git -C "<vault path>" commit -m "nightly consolidation YYYY-MM-DD"`
+1. `/usr/bin/git -C "<vault path>" add -A`
+2. `/usr/bin/git -C "<vault path>" commit -m "nightly consolidation YYYY-MM-DD"`
 
 This makes every night's machine edits one reviewable, revertible commit. "Nothing to commit" is fine — skip, don't retry. If git itself fails, proceed with the run but say so in the report. A read-only run (no changes) needs no commits.
 
