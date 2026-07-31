@@ -13,6 +13,7 @@ export const NOTE_TYPES = [
   "project",
   "person",
   "meeting",
+  "doc",
   "daily",
   "synthesis",
   "knowledge",
@@ -131,6 +132,26 @@ export function buildNote(spec: CreateSpec): CreatedNote {
           ["people", fields.people ?? ""],
         ],
         sections: ["Attendees", "Discussion", "Decisions", "Action Items"],
+        fields,
+        body: spec.body,
+      });
+    }
+    case "doc": {
+      const name = requireName(spec, "doc");
+      const project = requireProject(spec);
+      return assemble({
+        path: `Projects/${project}/Docs/${name}.md`,
+        title: name,
+        type: "doc",
+        heading: fields.title ?? name,
+        frontmatter: [
+          ["type", "doc"],
+          ["project", `"[[${project}]]"`],
+          ["created", created],
+        ],
+        // Drafts, research, and references have no fixed shape — imposing
+        // sections on them would be the server deciding what the writing is.
+        sections: [],
         fields,
         body: spec.body,
       });

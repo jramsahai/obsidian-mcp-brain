@@ -16354,6 +16354,7 @@ var NOTE_TYPES = [
   "project",
   "person",
   "meeting",
+  "doc",
   "daily",
   "synthesis",
   "knowledge",
@@ -16444,6 +16445,26 @@ function buildNote(spec) {
           ["people", fields.people ?? ""]
         ],
         sections: ["Attendees", "Discussion", "Decisions", "Action Items"],
+        fields,
+        body: spec.body
+      });
+    }
+    case "doc": {
+      const name = requireName(spec, "doc");
+      const project = requireProject(spec);
+      return assemble({
+        path: `Projects/${project}/Docs/${name}.md`,
+        title: name,
+        type: "doc",
+        heading: fields.title ?? name,
+        frontmatter: [
+          ["type", "doc"],
+          ["project", `"[[${project}]]"`],
+          ["created", created]
+        ],
+        // Drafts, research, and references have no fixed shape — imposing
+        // sections on them would be the server deciding what the writing is.
+        sections: [],
         fields,
         body: spec.body
       });
@@ -17462,13 +17483,16 @@ var noteCreate = {
       type: {
         type: "string",
         enum: [...NOTE_TYPES],
-        description: "project -> Projects/X/X.md; person -> People/First Last.md; meeting -> the project's Meeting Notes folder; daily -> Daily/DATE.md; synthesis -> Syntheses/DATE.md; knowledge and moc -> Knowledge Base/TOPIC/; shopping -> Shopping/Store.md; idea -> Ideas/X.md."
+        description: "project -> Projects/X/X.md; person -> People/First Last.md; meeting -> the project's Meeting Notes folder; doc -> the project's Docs folder, for drafts, research, and references; daily -> Daily/DATE.md; synthesis -> Syntheses/DATE.md; knowledge and moc -> Knowledge Base/TOPIC/; shopping -> Shopping/Store.md; idea -> Ideas/X.md."
       },
       name: {
         type: "string",
         description: "The plain name of the thing \u2014 project name, person's full name, store, idea, or knowledge note title. Not a path, not a generic name like Overview. Omit for daily and synthesis, which are named by date."
       },
-      project: { type: "string", description: "Exact existing project name. Required for type=meeting." },
+      project: {
+        type: "string",
+        description: "Exact existing project name. Required for type=meeting and type=doc."
+      },
       date: { type: "string", description: "YYYY-MM-DD. Used by daily, synthesis, and meeting. Defaults to today." },
       topic: {
         type: "string",

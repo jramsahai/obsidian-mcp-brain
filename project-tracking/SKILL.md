@@ -14,10 +14,10 @@ Manage project records in the user's Obsidian second brain. Use `second-brain` f
 
 ## Data Source
 
-- Vault config (name, path, CLI binary, timezone): see `second-brain` -> Vault. Examples assume vault name `Obsidian Vault`.
-- Project note: `Projects/[Project Name]/[Project Name].md` — named after the project so `[[Project Name]]` wikilinks resolve to it.
-- Central task file: `Tasks.md`
-- Table rows and section updates are mid-file edits: read the note, then edit in place — do not use file-level `append` (see `second-brain` -> Writing Into Notes).
+- Vault config (path, timezone): see `second-brain` -> Vault.
+- Project note: `Projects/[Project Name]/[Project Name].md` — named after the project so `[[Project Name]]` wikilinks resolve to it. Created with `obsidian__note_create type="project"`; the path is derived, never hand-constructed.
+- Central task file: `Tasks.md`, written through `obsidian__task_add` and `obsidian__task_update`.
+- Adding a table row or a line under a heading is `obsidian__section_append`, which targets the named section rather than the end of the file.
 
 ## Project Note Template
 
@@ -99,18 +99,18 @@ When updating a project:
 
 ## Meeting Notes and Docs
 
-Meeting notes:
+Both are created with `obsidian__note_create`, which derives the folder from the type and the project and writes the frontmatter. Never place these files by hand.
 
-- Store under `Projects/[Project Name]/Meeting Notes/YYYY-MM-DD-BriefDescription.md`.
-- Frontmatter: `type: meeting`, `project: "[[Project Name]]"`, `date`, `people` (wikilink list), `created`.
+Meeting notes — `obsidian__note_create type="meeting" name="YYYY-MM-DD BriefDescription" project="Project Name"`:
+
 - Include attendees (as `[[First Last]]` wikilinks), discussion points, decisions, and action items when available.
 - Add a brief entry to the project note's `## Conversation Log` pointing to the meeting note with a wikilink.
 - Route action items to `task-tracking` when they are concrete tasks.
 
-Docs:
+Docs — `obsidian__note_create type="doc" name="vendor-comparison" project="Project Name"` — for drafts, research, and references:
 
-- Store drafts, research, and references under `Projects/[Project Name]/Docs/`.
-- Name files descriptively, such as `draft-proposal.md` or `vendor-comparison.md`.
+- Name files descriptively: `draft-proposal`, `vendor-comparison`. Generic names are refused, which is why the older `Docs/INDEX.md` files could never be linked to.
+- A doc gets no section skeleton; its shape is yours. Pass the opening prose as `body` and fill the rest with `obsidian__section_append`.
 - Add a concise docs note to the project note when useful.
 
 ## Conversations and Waiting Items

@@ -702,14 +702,17 @@ const noteCreate: ToolDef = {
         type: "string",
         enum: [...NOTE_TYPES],
         description:
-          "project -> Projects/X/X.md; person -> People/First Last.md; meeting -> the project's Meeting Notes folder; daily -> Daily/DATE.md; synthesis -> Syntheses/DATE.md; knowledge and moc -> Knowledge Base/TOPIC/; shopping -> Shopping/Store.md; idea -> Ideas/X.md.",
+          "project -> Projects/X/X.md; person -> People/First Last.md; meeting -> the project's Meeting Notes folder; doc -> the project's Docs folder, for drafts, research, and references; daily -> Daily/DATE.md; synthesis -> Syntheses/DATE.md; knowledge and moc -> Knowledge Base/TOPIC/; shopping -> Shopping/Store.md; idea -> Ideas/X.md.",
       },
       name: {
         type: "string",
         description:
           "The plain name of the thing — project name, person's full name, store, idea, or knowledge note title. Not a path, not a generic name like Overview. Omit for daily and synthesis, which are named by date.",
       },
-      project: { type: "string", description: "Exact existing project name. Required for type=meeting." },
+      project: {
+        type: "string",
+        description: "Exact existing project name. Required for type=meeting and type=doc.",
+      },
       date: { type: "string", description: "YYYY-MM-DD. Used by daily, synthesis, and meeting. Defaults to today." },
       topic: {
         type: "string",

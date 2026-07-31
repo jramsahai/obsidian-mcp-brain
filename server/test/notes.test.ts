@@ -51,6 +51,46 @@ describe("note_create paths", () => {
     assert.equal(result.path, "Projects/Example Project/Meeting Notes/2026-08-02 Scope Review.md");
   });
 
+  test("puts a project doc in the project's Docs folder", () => {
+    const result = call("note_create", {
+      type: "doc",
+      name: "vendor-comparison",
+      project: "Example Project",
+      body: "Three vendors, one table.",
+    });
+    assert.equal(result.path, "Projects/Example Project/Docs/vendor-comparison.md");
+    const content = read(root, result.path);
+    assert.match(content, /^type: doc$/m);
+    assert.match(content, /^project: "\[\[Example Project\]\]"$/m);
+    assert.match(content, /Three vendors, one table\./);
+  });
+
+  test("a project doc gets no section skeleton — research has no fixed shape", () => {
+    const result = call("note_create", {
+      type: "doc",
+      name: "market-scan",
+      project: "Example Project",
+    });
+    assert.deepEqual(result.sections, []);
+    assert.ok(!read(root, result.path).includes("## "));
+  });
+
+  test("a doc still refuses the generic names that made the INDEX.md collisions", () => {
+    const message = callFails("note_create", {
+      type: "doc",
+      name: "INDEX",
+      project: "Example Project",
+    });
+    assert.match(message, /too generic/);
+  });
+
+  test("refuses a doc with no project — a doc has to belong to one", () => {
+    assert.match(
+      callFails("note_create", { type: "doc", name: "stray-notes" }),
+      /project is required/,
+    );
+  });
+
   test("refuses a meeting whose project has no note, naming the fix", () => {
     const message = callFails("note_create", {
       type: "meeting",
