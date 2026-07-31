@@ -56,7 +56,12 @@ The split is deliberate, and it is **mechanism vs. judgment, not safety vs. risk
 
 3. Update the **Vault** block of `second-brain/SKILL.md` with your vault path and timezone. That block is the single source of truth for the skills; the server reads its own config from the environment above.
 
-4. Optional: schedule `nightly-consolidation` (e.g. nightly cron) and `standup` (e.g. weekday mornings) in your harness.
+4. Optional: schedule `nightly-consolidation` (e.g. nightly cron) and `standup` (e.g. weekday mornings) in your harness. `cron/jobs.json` holds the prompts and tool allowlists both jobs run with — a scheduled prompt is prose the model obeys exactly like a skill, so it is version-controlled and linted alongside them. Delivery targets are not stored there.
+
+   Two things those jobs depend on, both learned the hard way:
+
+   - **The agent's model decides whether it has any vault tools at all.** MCP servers attach only on models using the `openai-completions` API. A model on the ChatGPT-responses path gets no `obsidian__*` tools, silently, and improvises a shell fallback instead — so pin the agent to a model you have verified, and do not leave a responses-API model in its fallback chain.
+   - **A prompt must name the skill files it depends on by full path.** Once shell access is removed there is no directory-listing tool, so an agent can read a path it knows but cannot discover one it does not. A `read` that lands on a directory fails with `EISDIR` and there is no recovery.
 
 ## Development
 

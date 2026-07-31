@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { readdirSync, readFileSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, test } from "node:test";
@@ -39,6 +39,10 @@ function schemaOf(name: string): { properties: Record<string, Property>; require
  */
 const DEAD_CLI_PATTERNS: { pattern: RegExp; what: string }[] = [
   { pattern: /obsidian-cli/i, what: "the removed obsidian-cli" },
+  // The exact string that survived in the cron prompts and caused a failed run:
+  // the model followed it, found no CLI, and consolidated nothing.
+  { pattern: /\/usr\/local\/bin\/obsidian/, what: "the removed CLI binary path" },
+  { pattern: /CLI (recovery|usage)/i, what: "the removed CLI recovery procedure" },
   { pattern: /\bsearch:context\b/, what: "the removed CLI verb search:context" },
   { pattern: /\bformat=json\b/, what: "the removed CLI flag format=json" },
   { pattern: /\bvault=/, what: "the removed CLI argument vault=" },
@@ -119,6 +123,84 @@ function skillFiles(): { path: string; name: string; content: string }[] {
     });
 }
 
+interface CronJob {
+  id: string;
+  name: string;
+  tools: string[];
+  message: string;
+}
+
+function cronJobs(): CronJob[] {
+  const path = join(SKILLS_DIR, "cron", "jobs.json");
+  return (JSON.parse(readFileSync(path, "utf8")) as { jobs: CronJob[] }).jobs;
+}
+
+/**
+ * The cron prompts are prose the model obeys exactly like a SKILL.md, but they
+ * live in the cron store rather than a skill file — so the original lint never
+ * saw them, and `/usr/local/bin/obsidian` survived there long after every skill
+ * was clean. A run then followed it, found no CLI, and did nothing.
+ */
+describe("cron job prompts", () => {
+  test("both jobs are present", () => {
+    assert.equal(cronJobs().length, 2);
+  });
+
+  test("no prompt names a tool or CLI verb that does not exist", () => {
+    const problems = cronJobs().flatMap((j) =>
+      lintSkillDocument(j.message).map((p) => `${j.name}: ${p}`),
+    );
+    assert.deepEqual(problems, []);
+  });
+
+  test("every tool in an allowlist is real", () => {
+    const known = new Set(TOOLS.map((t) => `obsidian__${t.name}`));
+    const problems: string[] = [];
+    for (const job of cronJobs()) {
+      for (const tool of job.tools) {
+        if (!tool.startsWith("obsidian__")) continue;
+        if (tool === "obsidian__*") continue;
+        if (!known.has(tool)) problems.push(`${job.name}: unknown tool ${tool}`);
+      }
+    }
+    assert.deepEqual(problems, []);
+  });
+
+  test("no job may write the vault through the shell", () => {
+    // The server owns the shape of every vault write. A job that can reach
+    // exec/write/edit/apply_patch/process can bypass all of it.
+    const banned = ["exec", "bash", "write", "edit", "apply_patch", "process"];
+    const problems = cronJobs().flatMap((j) =>
+      j.tools.filter((t) => banned.includes(t)).map((t) => `${j.name} allows ${t}`),
+    );
+    assert.deepEqual(problems, []);
+  });
+
+  test("every job can still reach the vault tools", () => {
+    // The mirror of the rule above: removing the shell is only safe if the
+    // replacement is actually allowed through.
+    for (const job of cronJobs()) {
+      assert.ok(
+        job.tools.some((t) => t === "obsidian__*" || t.startsWith("obsidian__")),
+        `${job.name} has no obsidian tools`,
+      );
+    }
+  });
+
+  test("every prompt names the skill files it depends on by full path", () => {
+    // There is no directory-listing tool once exec is gone: a prompt that says
+    // "follow the X skill" without a path leaves the model guessing, and a
+    // guess that lands on a directory returns EISDIR with no way to recover.
+    for (const job of cronJobs()) {
+      const paths = job.message.match(/\S+\/SKILL\.md/g) ?? [];
+      assert.ok(paths.length > 0, `${job.name} names no SKILL.md path`);
+      for (const p of paths) {
+        assert.ok(existsSync(p), `${job.name} points at a missing skill file: ${p}`);
+      }
+    }
+  });
+});
+
 describe("skill tool references", () => {
   test("finds the skills to lint", () => {
     const files = skillFiles();
@@ -178,6 +260,16 @@ describe("skill tool references", () => {
       ),
       [],
     );
+  });
+
+  test("catches the CLI binary path that survived in the cron prompts", () => {
+    assert.deepEqual(
+      lintSkillDocument("Vault at ~/Documents/Obsidian Vault/, CLI /usr/local/bin/obsidian."),
+      ['references the removed CLI binary path: "/usr/local/bin/obsidian"'],
+    );
+    assert.deepEqual(lintSkillDocument("The skill's CLI recovery steps are binding."), [
+      'references the removed CLI recovery procedure: "CLI recovery"',
+    ]);
   });
 
   test("catches leftover obsidian-cli instructions", () => {
