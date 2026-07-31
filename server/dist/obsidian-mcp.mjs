@@ -15497,6 +15497,18 @@ function formatDate(when, timezone) {
   const get = (type) => parts.find((p) => p.type === type)?.value ?? "";
   return `${get("year")}-${get("month")}-${get("day")}`;
 }
+function localTime(cfg = config2(), now = /* @__PURE__ */ new Date()) {
+  return new Intl.DateTimeFormat("en-GB", {
+    timeZone: cfg.timezone,
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: false
+  }).format(now);
+}
+function localTimestamp(cfg = config2(), now = /* @__PURE__ */ new Date()) {
+  const offset = new Intl.DateTimeFormat("en-US", { timeZone: cfg.timezone, timeZoneName: "longOffset" }).formatToParts(now).find((p) => p.type === "timeZoneName")?.value ?? "GMT+00:00";
+  return `${formatDate(now, cfg.timezone)}T${localTime(cfg, now)}:00${offset.replace("GMT", "") || "+00:00"}`;
+}
 var DATE_RE = /^(\d{4})-(\d{2})-(\d{2})$/;
 function assertDate(value, field) {
   const match = DATE_RE.exec(value);
@@ -18283,15 +18295,21 @@ var standupWrite = {
     const note = resolveNote(STANDUP_FILE);
     const current = readNote(note);
     const parsed = parseNote(current.content);
-    const frontmatter = parsed.raw ? `---
-${parsed.raw}
----
+    let next = `---
+${parsed.raw ? `${parsed.raw}
+` : ""}---
 
-` : "";
-    const next = `${frontmatter}# Standup \u2014 ${date3}
+# Standup \u2014 ${date3}
 
 ${body}
 `;
+    for (const [key, value] of [
+      ["type", "standup"],
+      ["generated", localTimestamp()],
+      ["tz", config2().timezone]
+    ]) {
+      next = setFrontmatterField(next, key, value).content;
+    }
     if (next === current.content) {
       return { path: note.path, date: date3, replaced: false, reason: "already identical" };
     }

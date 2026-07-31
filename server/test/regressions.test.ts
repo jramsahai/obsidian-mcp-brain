@@ -524,10 +524,36 @@ describe("standup", () => {
     const result = call("standup_write", { content: "## Today\n\n- ship it", date: "2026-07-31" });
     assert.equal(result.replaced, true);
     const content = read(root, "Standup.md");
-    assert.match(content, /^---\ntype: index/);
+    assert.match(content, /^---\ntype: standup/);
     assert.match(content, /# Standup — 2026-07-31/);
     assert.match(content, /- ship it/);
     assert.ok(!content.includes("vendor quote"), "yesterday's body must be gone");
+  });
+
+  test("standup_write keeps the note typed, even when frontmatter was stripped", () => {
+    // A whole-file write from outside the tool surface left the real vault's
+    // Standup.md with no frontmatter at all, so it fell out of every
+    // type-filtered query. Regenerating must put it back, not preserve the gap.
+    writeFileSync(join(root, "Standup.md"), "# Standup\n\nold body\n");
+    call("standup_write", { content: "- fresh", date: "2026-07-31" });
+    const content = read(root, "Standup.md");
+    assert.match(content, /^---\n/);
+    assert.match(content, /type: standup/);
+    assert.match(content, /generated: \d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}[+-]\d{2}:\d{2}/);
+    assert.match(content, /tz: America\/New_York/);
+    assert.equal(call("vault_list", { type: "standup" }).total, 1);
+  });
+
+  test("standup_write preserves frontmatter keys it does not own", () => {
+    writeFileSync(
+      join(root, "Standup.md"),
+      "---\ntype: standup\ncreated: 2026-06-28\ncustom: keep me\n---\n\n# Standup\n\nold\n",
+    );
+    call("standup_write", { content: "- fresh", date: "2026-07-31" });
+    const content = read(root, "Standup.md");
+    assert.match(content, /created: 2026-06-28/);
+    assert.match(content, /custom: keep me/);
+    assert.ok(!content.includes("old"), "the body is still replaced");
   });
 
   test("standup_write is idempotent", () => {

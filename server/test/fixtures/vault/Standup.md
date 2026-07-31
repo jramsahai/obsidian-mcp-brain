@@ -1,6 +1,7 @@
 ---
-type: index
+type: standup
 created: 2026-06-28
+tz: America/New_York
 ---
 
 # Standup

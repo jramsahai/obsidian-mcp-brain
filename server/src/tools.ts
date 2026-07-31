@@ -1,4 +1,4 @@
-import { assertDate, config, ToolError, today } from "./config.ts";
+import { assertDate, config, localTimestamp, ToolError, today } from "./config.ts";
 import { setChecklistItem } from "./checklist.ts";
 import { parseNote } from "./frontmatter.ts";
 import { buildEntities, planLinkify } from "./linkify.ts";
@@ -1408,8 +1408,17 @@ const standupWrite: ToolDef = {
     const note = resolveNote(STANDUP_FILE);
     const current = readNote(note);
     const parsed = parseNote(current.content);
-    const frontmatter = parsed.raw ? `---\n${parsed.raw}\n---\n\n` : "";
-    const next = `${frontmatter}# Standup — ${date}\n\n${body}\n`;
+    // The note keeps a frontmatter block even though it is regenerated: without
+    // one it is untyped, so every `type=`-filtered query stops seeing it. A
+    // whole-file write from outside the tool surface is what stripped it before.
+    let next = `---\n${parsed.raw ? `${parsed.raw}\n` : ""}---\n\n# Standup — ${date}\n\n${body}\n`;
+    for (const [key, value] of [
+      ["type", "standup"],
+      ["generated", localTimestamp()],
+      ["tz", config().timezone],
+    ] as const) {
+      next = setFrontmatterField(next, key, value).content;
+    }
     if (next === current.content) {
       return { path: note.path, date, replaced: false, reason: "already identical" };
     }

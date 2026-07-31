@@ -60,6 +60,15 @@ export function localTime(cfg: Config = config(), now: Date = new Date()): strin
   }).format(now);
 }
 
+/** Local timestamp with offset, e.g. `2026-07-31T15:30:00-04:00`. */
+export function localTimestamp(cfg: Config = config(), now: Date = new Date()): string {
+  const offset =
+    new Intl.DateTimeFormat("en-US", { timeZone: cfg.timezone, timeZoneName: "longOffset" })
+      .formatToParts(now)
+      .find((p) => p.type === "timeZoneName")?.value ?? "GMT+00:00";
+  return `${formatDate(now, cfg.timezone)}T${localTime(cfg, now)}:00${offset.replace("GMT", "") || "+00:00"}`;
+}
+
 const DATE_RE = /^(\d{4})-(\d{2})-(\d{2})$/;
 
 /**
