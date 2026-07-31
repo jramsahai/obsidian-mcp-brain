@@ -35,17 +35,20 @@ Why the run is shaped the way it is. Each rule names the tool that enforces it, 
 - Everything else is append-only. *Enforced by the tool surface: `obsidian__section_append`, `obsidian__relate`, and `obsidian__checklist_set` only ever add.*
 - Re-runs are idempotent. *Enforced by every write tool skipping content that is already present. A second pass over the same notes changes nothing.*
 - Never rewrite, reorder, summarize, or "improve" user prose — daily notes especially.
-- Never delete. *Enforced by the tool surface: nothing exposed deletes a note or a line, except `obsidian__inbox_route`, which removes the source line only after the destination write is verified.*
+- Never delete. *Enforced by the tool surface: nothing exposed deletes a note, and only two tools remove a line — `obsidian__inbox_route`, which removes the source line only after verifying the destination write, and `obsidian__inbox_clear`, which removes an inbox line only when the note that captured it exists. Both are bounded to inboxes.*
+- Completing a task moves it, sub-items included, rather than removing it. *Enforced by `obsidian__task_update`, which moves a task's whole block between sections.*
 - Do not create person or project notes from mentions. Leave unresolved wikilinks as candidates and list them in the report.
 
 ## Git Snapshots (required around writes)
 
 The vault is a git repo; these snapshots are the undo story for machine edits.
 
-1. Before the first write: `obsidian__vault_snapshot label="pre-consolidation YYYY-MM-DD"`
-2. After the last write: `obsidian__vault_snapshot label="nightly consolidation YYYY-MM-DD"`
+1. Before the first write: `obsidian__vault_snapshot label="pre-consolidation YYYY-MM-DD" scope="all"` — `scope="all"` parks whatever the user left uncommitted in Obsidian in its own commit, so it is not entangled with the machine's.
+2. After the last write: `obsidian__vault_snapshot label="nightly consolidation YYYY-MM-DD"` — the default `scope="machine"` commits only the notes this run wrote. That is what makes the pass revertible on its own: reverting it cannot discard the user's work.
 
 "Nothing to commit" is success, not an error — a clean vault means there was nothing of the user's to protect. A read-only run still costs nothing to snapshot.
+
+Check `git_error` in step 1's `obsidian__vault_status` before relying on any of this. When it is non-null, git is enabled but unusable and every snapshot will fail; report that and stop rather than writing an unprotected pass.
 
 ## Workflow
 
@@ -59,7 +62,7 @@ The vault is a git repo; these snapshots are the undo story for machine edits.
 ### 2. Inbox triage
 
 - Route items out of `Inbox.md` per `second-brain` routing with `obsidian__inbox_route`. It writes the destination, verifies it, and only then removes the inbox line, so an item can never be lost.
-- Items that are really tasks go through `obsidian__task_add` instead; route nothing afterwards, then remove the inbox line with a separate `obsidian__inbox_route` call only if the item is fully captured elsewhere.
+- Items that are really tasks go through `obsidian__task_add` instead. Then clear the inbox line with `obsidian__inbox_clear line="…" captured_as="Tasks"` — it removes the line only after checking that the note you named exists, and it refuses to touch anything that is not an inbox. Do not use `obsidian__inbox_route` for this: it always writes the item somewhere before removing it, so routing an already-captured task would file a stray copy into the destination.
 - Leave genuinely ambiguous items where they are, with a short `Needs routing:` note.
 - Run the `knowledge-base` nightly review for `Knowledge Base/Inbox.md` and loose KB notes.
 
@@ -67,7 +70,9 @@ The vault is a git repo; these snapshots are the undo story for machine edits.
 
 One call: `obsidian__linkify since="YYYY-MM-DD"` over the window from step 1, or `obsidian__linkify note="Note Name"` for a single note.
 
-The tool builds the entity list, skips headings, code, URLs, frontmatter, and existing links, and links only the first mention per note. Review its report rather than re-checking its work. Pass `dry_run` as true first if you want to see the proposal before it lands.
+The tool builds the entity list, skips headings, code, URLs, inline tags, frontmatter, and existing links, and links only the first mention per note. A name that two notes answer to is skipped entirely — deciding which one was meant is your job, through `obsidian__relate`, not a guess the linker is allowed to make. Review its report rather than re-checking its work. Pass `dry_run` as true first if you want to see the proposal before it lands.
+
+If the result carries `notes_failed`, some notes could not be written; the rest landed. `obsidian__linkify` is idempotent, so calling it again retries only what is missing.
 
 New unresolved links it surfaces are candidates for the report — do not create the notes.
 
@@ -78,12 +83,12 @@ This is the judgment step. For each note worth connecting:
 - Look for genuinely related notes with `obsidian__vault_search`, `obsidian__vault_links`, shared topics, and what you read in step 1.
 - `obsidian__relate note="A" target="B" reason="one line on why"` — the reason is mandatory and is the point; a bare link is noise. Add `mirror` when the connection reads as true in both directions.
 - Already-linked targets are skipped automatically, so you cannot double up.
-- The tool caps new links per note per night. That cap is a restraint on volume, not on originality. If you keep hitting it with links you believe in, say so in the report.
+- The tool caps new links per note per night, and a mirrored link counts against the target's cap too — so a hub note cannot quietly collect a dozen inbound links in one run. When the target is full the mirror is skipped and the result says so. That cap is a restraint on volume, not on originality. If you keep hitting it with links you believe in, say so in the report.
 
 ### 5. MOC and index maintenance
 
 - Per `knowledge-base`: topics with roughly 5+ notes get a MOC, created with `obsidian__note_create type="moc"`. Update existing MOCs with new notes via `obsidian__section_append`.
-- Keep `Knowledge Base/README.md` pointing at MOCs and top-level topics.
+- Keep `Knowledge Base/README.md` pointing at MOCs and top-level topics, and append the dated review entry there with `keep_newest=20` (see `knowledge-base`). If that index note does not exist yet, create it with `obsidian__note_create type="index" name="Knowledge Base"`.
 
 ### 6. Graph hygiene
 

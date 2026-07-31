@@ -12,44 +12,37 @@ description: >
 
 Track per-store shopping lists so the user can recall what they wanted when they're at that store. Use `second-brain` for shared vault conventions.
 
-## Data Source
+## Tools
 
-- Vault config (name, path, CLI binary, timezone): see `second-brain` -> Vault. Examples assume vault name `Obsidian Vault`.
-- Lists: `Shopping/[Store Name].md` — one file per store (e.g. `Shopping/Home Depot.md`, `Shopping/Costco.md`)
+One file per store, at `Shopping/[Store Name].md`. The server derives the path from the store name.
 
-## List Template
+| Need | Call |
+|---|---|
+| Create a store list | `obsidian__note_create type="shopping" name="Home Depot"` |
+| Add or update an item | `obsidian__checklist_set note="Home Depot" item="Wood screws" detail="2 inch"` |
+| Mark an item bought | `obsidian__checklist_set note="Home Depot" item="Wood screws" checked=true` |
+| Read the list | `obsidian__vault_read note="Home Depot"` |
 
-```markdown
----
-type: shopping
-store: Store Name
-created: YYYY-MM-DD
----
+A store list is deliberately a flat list of checkboxes with no sections — `obsidian__checklist_set` needs a `section` argument only for notes that have sections, so keeping the file sectionless is what makes every later add a one-argument call.
 
-# Store Name
-
-Items to pick up next time at Store Name. Check off when bought; clear checked items periodically.
-
-- [ ] Item — optional detail (size, brand, aisle, why)
-```
+`obsidian__checklist_set` adds the item if it is missing, merges new detail into the line if it is already there, and checks or unchecks it. It never removes a line, so a repeat capture is always safe.
 
 ## Workflow
 
 Adding an item ("add X to the Home Depot list", "I need to grab X next time I'm at Costco"):
 
-1. Find `Shopping/[Store].md`; create it from the template if missing.
-2. If the item is already listed unchecked, merge any new detail into that line instead of adding a duplicate.
-3. Otherwise append `- [ ] Item` with any detail the user gave. Preserve their wording.
-4. If the item relates to a project, add the `[[Project Name]]` wikilink after the item text.
+1. `obsidian__checklist_set note="Home Depot" item="Wood screws" detail="2 inch"`. Preserve the user's wording in `item`.
+2. If the store has no list yet, `obsidian__note_create type="shopping" name="Home Depot"` first, then add the item.
+3. Merging is automatic: a repeat capture of the same item folds new detail into the existing line rather than adding a second one.
+4. If the item relates to a project, include the `[[Project Name]]` wikilink in the item text.
 
 Checking a list ("what do I need at Home Depot?"):
 
-- Read the store file and return unchecked items. The CLI shortcut works too: `tasks todo path="Shopping/Home Depot.md"`.
+- `obsidian__vault_read note="Home Depot"` and report the unchecked items.
 
 Marking bought:
 
-- Check the item off (`- [x]`). Do not delete.
-- Periodically (or when the user asks to clean up), move checked items to a `## Bought` section at the bottom or clear them if the user says so.
+- `obsidian__checklist_set note="Home Depot" item="Wood screws" checked=true`. A checked item stays on the list as the record that it was bought; nothing removes it.
 
 No store specified:
 
@@ -60,4 +53,4 @@ No store specified:
 
 - Errands with deadlines ("buy X before Friday") also get a task in `Tasks.md` via `task-tracking`, linking the store list if useful.
 - Trip/event expense tracking is out of scope here; capture to `Inbox.md` if the user asks for it.
-- Recurring staples: keep a `## Staples` section in the store file; on request, copy unchecked staples into the active list.
+- Recurring staples: keep them in a separate note, e.g. `obsidian__note_create type="shopping" name="Costco Staples"`, and copy items across on request. Do not add a `## Staples` heading to a store list — a store file with any section makes `section` required on every later `obsidian__checklist_set`, and a one-off purchase then gets filed into the staples list by mistake.

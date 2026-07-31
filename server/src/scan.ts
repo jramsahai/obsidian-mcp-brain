@@ -5,6 +5,8 @@
  * three chances for the same off-by-one to disagree with itself.
  */
 
+import { frontmatterEndLine } from "./frontmatter.ts";
+
 export interface Line {
   text: string;
   /** 0-based line index within the file. */
@@ -56,15 +58,6 @@ export function scanLines(content: string): Line[] {
   return out;
 }
 
-/** Index of the closing `---`, or -1 when the note has no frontmatter. */
-function frontmatterEndLine(lines: string[]): number {
-  if (lines[0]?.trim() !== "---") return -1;
-  for (let i = 1; i < lines.length; i++) {
-    if (lines[i].trim() === "---") return i;
-  }
-  return -1;
-}
-
 export interface Range {
   start: number;
   /** Exclusive. */
@@ -76,6 +69,10 @@ const PROTECTED_PATTERNS = [
   /\[\[[^\][\n]*\]\]/g, // existing wikilinks
   /\[[^\][\n]*\]\([^)\n]*\)/g, // markdown links and images
   /(?:https?:\/\/|www\.)[^\s)\]]+/g, // bare URLs
+  // Obsidian inline tags. `#` is not a word character, so without this a tag
+  // body reads as a bare mention and linkify brackets it in place — turning
+  // `#Wayfinder` into `#[[Wayfinder]]`, which is no longer a tag at all.
+  /(?:^|\s)#[\w/-]+/g,
 ] as const;
 
 /**

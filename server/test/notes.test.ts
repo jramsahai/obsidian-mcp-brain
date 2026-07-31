@@ -117,9 +117,12 @@ describe("note_create guards", () => {
   });
 
   test("refuses to overwrite a note that already has content", () => {
-    const message = callFails("note_create", { type: "person", name: "Jane Doe" });
-    assert.match(message, /already exists/);
-    assert.match(message, /section_append/);
+    // A collision is a result the caller can branch on, not an error — the
+    // description tells the model to check `created`, so it has to get one.
+    const result = call("note_create", { type: "person", name: "Jane Doe" });
+    assert.equal(result.created, false);
+    assert.match(result.reason, /already exists/);
+    assert.match(result.reason, /section_append/);
     // The existing note is untouched.
     assert.match(read(root, "People/Jane Doe.md"), /Prefers written summaries/);
   });

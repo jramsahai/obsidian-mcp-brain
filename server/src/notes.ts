@@ -1,7 +1,15 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname } from "node:path";
 import { assertDate, ToolError, today } from "./config.ts";
-import { absolutePath, findNote, GENERIC_NAMES, invalidateIndex } from "./vault.ts";
+import { frontmatterEndLine } from "./frontmatter.ts";
+import {
+  absolutePath,
+  findNote,
+  GENERIC_NAMES,
+  invalidateIndex,
+  isTemplate,
+  recordWrite,
+} from "./vault.ts";
 
 /**
  * The frontmatter contract and folder layout, in code. This is the table from
@@ -20,6 +28,7 @@ export const NOTE_TYPES = [
   "moc",
   "shopping",
   "idea",
+  "index",
 ] as const;
 export type NoteType = (typeof NOTE_TYPES)[number];
 
@@ -118,7 +127,7 @@ export function buildNote(spec: CreateSpec): CreatedNote {
     }
     case "meeting": {
       const name = requireName(spec, "meeting");
-      const project = requireProject(spec);
+      const project = requireProject(spec, "meeting");
       return assemble({
         path: `Projects/${project}/Meeting Notes/${name}.md`,
         title: name,
@@ -138,7 +147,7 @@ export function buildNote(spec: CreateSpec): CreatedNote {
     }
     case "doc": {
       const name = requireName(spec, "doc");
-      const project = requireProject(spec);
+      const project = requireProject(spec, "doc");
       return assemble({
         path: `Projects/${project}/Docs/${name}.md`,
         title: name,
@@ -244,6 +253,25 @@ export function buildNote(spec: CreateSpec): CreatedNote {
           `Items to pick up next time at ${name}. Check off when bought; clear checked items periodically.`,
       });
     }
+    case "index": {
+      // A folder's own README. The vault already uses `type: index` for
+      // Inbox.md and Standup.md; without a way to create one, the Knowledge
+      // Base review log had no file to live in and was silently never written.
+      const folder = requireName(spec, "index");
+      return assemble({
+        path: `${folder}/README.md`,
+        title: "README",
+        type: "index",
+        heading: `${folder}`,
+        frontmatter: [
+          ["type", "index"],
+          ["created", created],
+        ],
+        sections: ["Overview", "Review Log"],
+        fields,
+        body: spec.body,
+      });
+    }
     case "idea": {
       const name = requireName(spec, "idea");
       return assemble({
@@ -288,6 +316,22 @@ function requireName(spec: CreateSpec, type: string): string {
     );
   }
   const name = raw.replace(/\.md$/i, "").trim();
+  // Characters Obsidian forbids in a note name because they end a wikilink
+  // early. `stripWikilink` truncates at the first `#` or `|`, so a note whose
+  // filename contains one is written to disk and then unreachable by every
+  // tool — not by name and not by path. That is the shape of a reference, so
+  // the server owns it rather than asking the model to remember.
+  const illegal = /[[\]#|^]/.exec(name);
+  if (illegal) {
+    throw new ToolError(
+      `name may not contain "${illegal[0]}" — it would break the [[wikilink]] to this note; got "${name}". Use a plain name, e.g. "C Sharp Basics" rather than "C# Basics".`,
+    );
+  }
+  if (/[\u0000-\u001f\u007f]/.test(name)) {
+    throw new ToolError(
+      `name may not contain line breaks or control characters; got ${JSON.stringify(name)}.`,
+    );
+  }
   if (GENERIC_NAMES.has(name.toLowerCase())) {
     throw new ToolError(
       `"${name}" is too generic to be a note name — a wikilink to it would be ambiguous. Name the note after the thing it is about, e.g. the project, person, or topic name.`,
@@ -299,13 +343,22 @@ function requireName(spec: CreateSpec, type: string): string {
   return name;
 }
 
-function requireProject(spec: CreateSpec): string {
+function requireProject(spec: CreateSpec, type: string): string {
   const raw = (spec.project ?? "").trim();
-  if (!raw) throw new ToolError("project is required for a meeting note — meeting notes live inside the project folder.");
+  if (!raw) {
+    throw new ToolError(
+      `project is required for a ${type} note — ${type} notes live inside the project folder.`,
+    );
+  }
   const note = safeFind(raw);
   if (!note || note.type !== "project") {
     throw new ToolError(
       `project "${raw}" has no project note in the vault, so [[${raw}]] would not resolve. Create the project note first with note_create type="project".`,
+    );
+  }
+  if (isTemplate(note)) {
+    throw new ToolError(
+      `"${note.title}" is a template, not a real project. Create the project first with note_create type="project", then file the ${type} note under it.`,
     );
   }
   return note.title;
@@ -318,7 +371,17 @@ function requireTopic(spec: CreateSpec): string {
       'topic is required for knowledge and moc notes — it is the Knowledge Base folder path, e.g. "Vehicles" or "Cycling/Repair".',
     );
   }
-  if (raw.startsWith("..") || raw.includes("//")) throw new ToolError(`topic "${raw}" is not a valid folder path.`);
+  // Per segment, not per prefix. `Cycling/../../Daily` resolves inside the
+  // vault root so absolutePath's escape guard never fires, yet the note lands
+  // outside Knowledge Base entirely; and a `.Archive` segment is skipped by
+  // walk(), so the note exists on disk and is invisible to every reader.
+  const segments = raw.split("/");
+  const bad = segments.find((s) => s === "" || s.startsWith("."));
+  if (bad !== undefined) {
+    throw new ToolError(
+      `topic "${raw}" is not a valid folder path — "${bad || "(empty)"}" is not a usable folder name. Use plain folder names, e.g. "Vehicles" or "Cycling/Repair".`,
+    );
+  }
   return raw;
 }
 
@@ -375,11 +438,30 @@ function assemble(a: Assembly): CreatedNote {
  * Frontmatter is emitted, never re-serialized. Wikilinks in list properties are
  * quoted because Obsidian only reads them as graph edges when they are.
  */
-function renderValue(key: string, value: string): string {
+export function renderValue(key: string, value: string): string {
   if (value.startsWith("[") || value.startsWith('"')) return value;
   if (WIKILINK_LIST_KEYS.has(key)) return `[${splitList(value).map(quoteLink).join(", ")}]`;
   if (PLAIN_LIST_KEYS.has(key)) return `[${splitList(value).join(", ")}]`;
-  return value;
+  return quoteScalar(value);
+}
+
+/**
+ * A scalar that YAML would read as anything other than a plain string gets
+ * quoted. Emitting `status: Blocked: waiting on legal` raw is a YAML error, so
+ * Obsidian discards the *whole* property block — the note loses type, created,
+ * people and topics in the Properties UI and in Dataview — while this server's
+ * own line-based parser still reads them. Server and app then disagree about
+ * what is in the vault, silently.
+ */
+function quoteScalar(value: string): string {
+  if (value === "") return value;
+  const needsQuote =
+    /:\s/.test(value) ||
+    value.endsWith(":") ||
+    /\s#/.test(value) ||
+    /^[#[\]{}&*!|>%@`'"?,-]/.test(value);
+  if (!needsQuote) return value;
+  return `"${value.replace(/\\/g, "\\\\").replace(/"/g, '\\"')}"`;
 }
 
 function splitList(value: string): string[] {
@@ -392,6 +474,81 @@ function splitList(value: string): string[] {
 function quoteLink(value: string): string {
   const inner = value.replace(/^\[\[/, "").replace(/\]\]$/, "").trim();
   return `"[[${inner}]]"`;
+}
+
+/**
+ * Frontmatter keys a tool may change on an existing note. `type`, `created`,
+ * `date`, `project`, `topic`, and `store` are excluded: they decide where the
+ * note lives and what it is, so changing one would make the frontmatter
+ * disagree with the note's own path.
+ */
+export const SETTABLE_FIELDS = [
+  "status",
+  "role",
+  "started",
+  "due",
+  "source",
+  "topics",
+  "people",
+  "projects",
+  "aliases",
+  "tags",
+] as const;
+export type SettableField = (typeof SETTABLE_FIELDS)[number];
+
+const FM_KEY_RE = /^([A-Za-z0-9_][A-Za-z0-9_ -]*):/;
+
+export interface FieldEdit {
+  content: string;
+  changed: boolean;
+  before?: string;
+}
+
+/**
+ * Set or clear one frontmatter key by targeted line edit — the block is never
+ * re-serialized, so every other key keeps its exact bytes. Which status a
+ * project has is the model's judgment; getting the YAML right (quoting a
+ * wikilink list so Obsidian still counts it as a graph edge) is mechanism, and
+ * that is the half this owns.
+ */
+export function setFrontmatterField(
+  content: string,
+  key: string,
+  value: string | null,
+): FieldEdit {
+  const lines = content.split("\n");
+  const end = frontmatterEndLine(lines);
+  if (end === -1) {
+    throw new ToolError(
+      "this note has no frontmatter block, so there is no field to set. Notes created by note_create always have one.",
+    );
+  }
+
+  let at = -1;
+  for (let i = 1; i < end; i++) {
+    const match = FM_KEY_RE.exec(lines[i]);
+    if (match && match[1].trim().toLowerCase() === key.toLowerCase()) {
+      at = i;
+      break;
+    }
+  }
+  // A block-list value spans its `- item` continuation lines.
+  let stop = at + 1;
+  if (at !== -1) while (stop < end && /^\s*-\s+/.test(lines[stop])) stop++;
+
+  const before = at === -1 ? undefined : lines.slice(at, stop).join("\n");
+  const rendered = value === null ? null : `${key}: ${renderValue(key, value)}`;
+
+  if (at === -1) {
+    if (rendered === null) return { content, changed: false };
+    const next = [...lines];
+    next.splice(end, 0, rendered);
+    return { content: next.join("\n"), changed: true };
+  }
+  if (rendered === before) return { content, changed: false, before };
+  const next = [...lines];
+  next.splice(at, stop - at, ...(rendered === null ? [] : [rendered]));
+  return { content: next.join("\n"), changed: true, before };
 }
 
 export interface CreateResult {
@@ -426,6 +583,7 @@ export function createNote(spec: CreateSpec): CreateResult {
   }
   mkdirSync(dirname(full), { recursive: true });
   writeFileSync(full, note.content, "utf8");
+  recordWrite(note.path);
   invalidateIndex();
   return {
     created: true,

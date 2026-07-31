@@ -53,12 +53,32 @@ export interface Entity {
 }
 
 export function buildEntities(notes: Note[] = getIndex().notes): Entity[] {
+  // Names that answer to more than one note, counted across the *whole* vault
+  // rather than the linkable subset — a knowledge note and a doc sharing a
+  // title still make `[[Title]]` ambiguous.
+  const owners = new Map<string, Set<string>>();
+  for (const note of notes) {
+    for (const key of [note.title, ...note.aliases]) {
+      const k = key.trim().toLowerCase();
+      const set = owners.get(k) ?? new Set<string>();
+      set.add(note.path);
+      owners.set(k, set);
+    }
+  }
+  const unique = (name: string) => (owners.get(name.trim().toLowerCase())?.size ?? 0) <= 1;
+
   const entities: Entity[] = [];
   for (const note of notes) {
     if (!note.type || !LINKABLE_TYPES.has(note.type)) continue;
     if (isTemplate(note)) continue;
+    // linkify writes a bare `[[Title]]` and is not allowed to decide which of
+    // two same-named notes was meant, so an ambiguous name is simply not an
+    // entity. Deciding is `relate`'s job, where a human-written reason exists.
+    if (!unique(note.title)) continue;
     for (const phrase of [note.title, ...note.aliases]) {
-      if (eligible(phrase)) entities.push({ phrase, title: note.title, path: note.path });
+      if (eligible(phrase) && unique(phrase)) {
+        entities.push({ phrase, title: note.title, path: note.path });
+      }
     }
   }
   // Longest first, so "Example Project" wins over "Example" and the shorter

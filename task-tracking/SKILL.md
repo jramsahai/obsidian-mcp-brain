@@ -12,104 +12,81 @@ description: >
 
 Manage centralized tasks in the user's Obsidian second brain. Use `second-brain` for shared vault conventions and `project-tracking` when project state must be created or changed.
 
-## Data Source
+## Tools
 
-- Vault config (name, path, CLI binary, timezone): see `second-brain` -> Vault. Examples assume vault name `Obsidian Vault`.
-- Task file: `Tasks.md`
-- Project files: `Projects/[Project Name]/[Project Name].md`
-- The CLI understands checkbox tasks natively: `tasks`, `tasks todo`, `tasks done`, `task ref=<path:line> done`.
+`Tasks.md` has a positional grammar, so it is owned by two tools and nothing else can write to it — `obsidian__section_append` on `Tasks` is refused with an error saying so.
 
-## Tasks.md Structure
+| Need | Call |
+|---|---|
+| Add a task | `obsidian__task_add text="…"` |
+| Change, move, or complete a task | `obsidian__task_update match="…"` |
+| See the current list | `obsidian__vault_read note="Tasks"` |
+| See one section | `obsidian__vault_read note="Tasks" section="Waiting On Others"` |
 
-Tasks are markdown checkboxes (not tables) so Obsidian and the CLI can query them and so project links are real wikilinks.
+`obsidian__task_add` composes the line, files it in the right section, and rejects a near-duplicate of an existing task. `obsidian__task_update` finds the task by a distinctive fragment of its text, recomposes the whole line, and moves it between sections — including any sub-items nested under it.
 
-```markdown
----
-type: index
-created: YYYY-MM-DD
----
+Pass the parts as arguments; never assemble a task line yourself. `text` is the user's wording only: a leading `- [ ]`, a `📅` date, or a `⏫` priority inside `text` is refused, because those belong in the `due` and `priority` arguments where the tools can read them.
 
-# Tasks
+## Adding a Task
 
-## Active
-
-- [ ] Task text [[Project Name]] 📅 2026-07-10 ⏫ — optional notes
-
-## Waiting On Me
-
-- [ ] Task text [[Project Name]] — what the user owes and to whom
-
-## Waiting On Others
-
-- [ ] Task text [[Project Name]] (waiting on: [[First Last]] since YYYY-MM-DD)
-
-## Done
-
-- [x] Task text [[Project Name]] ✅ YYYY-MM-DD
+```
+obsidian__task_add text="Send the revised proposal" project="Wayfinder" due="2026-08-04" priority="high"
 ```
 
-Line format, in order:
+- `project` must be the exact name of an existing project note. A project with no note is refused rather than written as a dangling link; the error lists the projects that do exist.
+- `section` defaults to `Active`, or to `Waiting On Others` when `waiting_on` is set. Use `Waiting On Me` when the user owes someone something.
+- `waiting_on` takes a person's note name and files the task under `Waiting On Others` with a dated marker. `waiting_since` defaults to today.
+- `notes` is a short trailing note for anything that does not fit the other fields — including a date the user was vague about. Never invent a date to fill `due`.
 
-1. Checkbox and task text (preserve the user's wording, keep it actionable).
-2. `[[Project Name]]` wikilink when the task belongs to a project. Omit for standalone tasks.
-3. `📅 YYYY-MM-DD` due date, when known.
-4. Priority: `⏫` high, `🔼` medium, `🔽` low; omit for normal.
-5. `(waiting on: [[First Last]] since YYYY-MM-DD)` for Waiting On Others.
-6. `✅ YYYY-MM-DD` completion date on done tasks.
-7. `— notes` after an em-dash for anything else.
+If the task covers work an open task already covers, `obsidian__task_add` refuses and names the existing task. Update that one instead of adding a second line.
 
-These markers are compatible with the Obsidian Tasks plugin but do not require it.
+Then, when the task belongs to an existing project, record it on the project note:
 
-## Workflow
+```
+obsidian__section_append note="Wayfinder" section="Related Tasks" content="- Send the revised proposal"
+```
 
-When adding a task:
+## Updating a Task
 
-1. Read `Tasks.md`.
-2. Check for an existing task covering the same work; if a near-duplicate exists, update that line instead of adding a second one.
-3. Determine the correct section: `Active`, `Waiting On Me`, or `Waiting On Others`.
-4. Write the task line per the format above. Only include due date, priority, project, and notes when known.
-5. If a project is named, match it to an existing `Projects/[Project Name]/[Project Name].md` and use the exact name in the wikilink.
-6. Add a related task reference to the project note's `## Related Tasks` when the task belongs to a project and the project exists.
+```
+obsidian__task_update match="revised proposal" due="2026-08-06" priority="medium"
+```
 
-When updating a task:
-
-1. Locate the task by exact text or the closest unambiguous match (`tasks todo verbose` gives file/line refs).
-2. Update due date, priority, project link, waiting person, or notes as requested.
-3. Move the line to the appropriate section if the status or waiting state changes.
-4. On completion, mark `[x]`, append `✅ YYYY-MM-DD` (local date), and move it to `## Done`.
-5. If the task update changes project context, update `## Related Tasks` in the project note or call out the needed project update.
+- `match` is a distinctive fragment of the existing task text and must identify exactly one task. If it matches several, the error lists them; pass a longer fragment.
+- `done=true` checks the box, stamps the completion date, and moves the task to `## Done`. `done=false` reopens it.
+- `section` moves the task explicitly. Sub-items indented under a task move with it.
+- An empty string clears `project`, `due`, `waiting_on`, or `notes`. `priority="none"` clears the priority.
+- Rewording a task into an existing task's wording is refused, for the same reason a duplicate add is.
 
 ## Task-Project Relationship
 
-- Treat `Tasks.md` as the source of task state.
-- Treat `Projects/[Project Name]/[Project Name].md` as the source of project state.
-- The task's project wikilink must exactly match the project note name.
-- If a task belongs to a project, add or preserve a concise reference under that project's `## Related Tasks`.
+- `Tasks.md` is the source of task state. `Projects/[Project Name]/[Project Name].md` is the source of project state.
+- When a task belongs to a project, keep a concise reference under that project's `## Related Tasks`.
 - Do not duplicate project status in task notes unless it is necessary context.
-- Do not create a new project just because a task mentions a possible project name unless the user clearly wants it tracked as a project.
-- Do not mark a project `Done`, `Blocked`, or `On Hold` only because a task changed; route explicit project state changes to `project-tracking`.
-- If task state and project state conflict, preserve source data and surface the inconsistency.
+- Do not create a project because a task mentions a possible project name, unless the user clearly wants it tracked as one.
+- Do not mark a project `Done`, `Blocked`, or `On Hold` because a task changed. Route explicit project state changes to `project-tracking`.
+- If task state and project state conflict, preserve both and surface the inconsistency rather than reconciling it yourself.
 
 ## Due Dates and Waiting States
 
-- Parse dates relative to the local timezone (see `second-brain` vault config).
-- Put tasks assigned to the user or requiring the user's action in `Active` or `Waiting On Me` depending on wording.
-- Put tasks blocked by someone else in `Waiting On Others` with the person's wikilink in the `(waiting on: ...)` marker.
-- Preserve unclear dates as `— notes` rather than inventing a date.
+- Resolve relative dates ("friday", "end of month") against the vault's local timezone before calling; the tools take exact `YYYY-MM-DD` and refuse anything else, including impossible dates like `2026-02-31`.
+- Tasks needing the user's action go in `Active`, or `Waiting On Me` when the user owes it to someone specific.
+- Tasks blocked by someone else go in `Waiting On Others` via `waiting_on`.
+- Preserve an unclear date in `notes` rather than inventing one.
 
 ## Nudging Logic
 
-Use this logic when asked to review or when another skill needs task signals:
+Use this when asked to review, or when another skill needs task signals:
 
-- Overdue: `📅` date before today and task not `[x]`.
-- Due soon: due in the next 3-5 days.
-- Idle: active task with no visible update for more than 7 days — judged only from dated evidence (due dates, `since` dates, completion dates, dated notes). Skip idle detection for items with no dates; do not guess.
-- Waiting on others: waiting for more than 5 days per the `since` date.
+- **Overdue** — due date before today and the task is not done.
+- **Due soon** — due in the next 3-5 days.
+- **Idle** — an active task with no visible update for more than 7 days, judged only from dated evidence (due dates, `since` dates, completion dates, dated notes). Skip idle detection for items with no dates; do not guess.
+- **Waiting on others** — waiting more than 5 days per the `since` date.
 
-Do not nudge the same item twice in less than 48 hours if prior nudge data is available.
+Do not nudge the same item twice in less than 48 hours when prior nudge data is available.
 
 ## Safety
 
-- Do not silently delete tasks.
+- Nothing in the tool surface deletes a task, and completion is a move to `## Done`, not a removal.
 - Do not infer completion from conversational optimism; require explicit completion language.
-- Ask or capture to `Inbox.md` when a task has multiple plausible projects or owners.
+- Ask, or capture to `Inbox.md`, when a task has multiple plausible projects or owners.

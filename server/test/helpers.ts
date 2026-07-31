@@ -4,7 +4,7 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { setConfig, type Config } from "../src/config.ts";
 import { resetRelateBudget } from "../src/relate.ts";
-import { invalidateIndex } from "../src/vault.ts";
+import { clearWrittenPaths, invalidateIndex } from "../src/vault.ts";
 import { TOOLS_BY_NAME } from "../src/tools.ts";
 
 const here = dirname(fileURLToPath(import.meta.url));
@@ -25,6 +25,7 @@ export function useVault(options: { git?: boolean } = {}): string {
   };
   setConfig(cfg);
   invalidateIndex();
+  clearWrittenPaths();
   resetRelateBudget();
   active = dir;
   return root;

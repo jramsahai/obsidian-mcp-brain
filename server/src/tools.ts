@@ -8,6 +8,8 @@ import {
   DAILY_SECTIONS,
   ensureDailyNote,
   NOTE_TYPES,
+  setFrontmatterField,
+  SETTABLE_FIELDS,
   type NoteType,
 } from "./notes.ts";
 import {
@@ -40,16 +42,19 @@ import {
   type Task,
 } from "./tasks.ts";
 import {
+  clearWrittenPaths,
   findNote,
   getIndex,
   isTemplate,
   nearestTitles,
   readNote,
   resolveNote,
+  wikilinkTarget,
   writeNoteGuarded,
+  writtenPaths,
   type Note,
 } from "./vault.ts";
-import { gitAvailable, isDirty, snapshot, statusPorcelain } from "./git.ts";
+import { gitDiagnosis, isDirty, snapshot, statusPorcelain } from "./git.ts";
 
 export interface ToolDef {
   name: string;
@@ -93,6 +98,21 @@ function num(args: Record<string, unknown>, key: string): number | undefined {
   return n;
 }
 
+/**
+ * A limit is a count, so zero and negatives are not "just small". They flowed
+ * into Array.slice and silently produced a short list that still reported
+ * itself as complete — the exact wrong-conclusion failure `truncation()` exists
+ * to prevent.
+ */
+function limitArg(args: Record<string, unknown>, fallback: number): number {
+  const value = num(args, "limit");
+  if (value === undefined) return fallback;
+  if (!Number.isInteger(value) || value < 1) {
+    throw new ToolError(`limit must be a whole number of at least 1; got ${value}.`);
+  }
+  return value;
+}
+
 function enumArg<T extends string>(
   args: Record<string, unknown>,
   key: string,
@@ -128,12 +148,33 @@ function findNoteSafe(ref: string): Note | null {
   }
 }
 
+/**
+ * The one gate every mutating handler resolves through. Which notes may be
+ * written at all is the *shape* of a write, so it lives here in code rather
+ * than as a paragraph in each skill that the model has to remember — the whole
+ * reason these tools exist.
+ */
+function resolveWritable(ref: string, options: { allowTasks?: boolean } = {}): Note {
+  const note = resolveNote(ref);
+  if (isTemplate(note)) {
+    throw new ToolError(
+      `"${note.path}" is a template — writing to it would contaminate every note later created from it. Create the real note with note_create first, then write to that.`,
+    );
+  }
+  if (!options.allowTasks && note.path === TASKS_FILE) {
+    throw new ToolError(
+      `${TASKS_FILE} has a positional grammar and is owned by task_add and task_update; a line written into it directly is not a task those tools can parse or move. Use task_add to add a task, or task_update to change one.`,
+    );
+  }
+  return note;
+}
+
 // ---------------------------------------------------------------------- tools
 
 const vaultStatus: ToolDef = {
   name: "vault_status",
   description:
-    "Vault orientation in one call: today's local date, git dirty state, note counts by type, latest synthesis and daily note, unresolved/orphan link counts, and notes changed in the last 24 hours. Call this first in any standup or nightly run instead of exploring the vault by hand.",
+    "Vault orientation in one call: today's local date, git dirty state, note counts by type, latest synthesis and daily note, unresolved/orphan link counts, and notes changed in the last 24 hours. Call this first in any standup or nightly run instead of exploring the vault by hand. git_error is non-null when git is enabled but unusable — snapshots will fail until it is fixed.",
   inputSchema: { type: "object", properties: {}, additionalProperties: false },
   handler: () => {
     const cfg = config();
@@ -149,6 +190,8 @@ const vaultStatus: ToolDef = {
     );
     const cutoff = Date.now() - 24 * 60 * 60 * 1000;
     const changed = idx.notes.filter((n) => n.mtimeMs >= cutoff).map((n) => n.path);
+    const gitError = gitDiagnosis();
+    const usable = cfg.gitEnabled && gitError === null;
     const latestIn = (folder: string) =>
       idx.notes
         .filter((n) => n.path.startsWith(`${folder}/`) && /\d{4}-\d{2}-\d{2}/.test(n.title))
@@ -167,8 +210,11 @@ const vaultStatus: ToolDef = {
       orphan_count: orphans.length,
       changed_last_24h: changed,
       git_enabled: cfg.gitEnabled,
-      git_dirty: cfg.gitEnabled && gitAvailable() ? isDirty() : null,
-      git_dirty_files: cfg.gitEnabled && gitAvailable() ? statusPorcelain() : [],
+      // "off" and "on but broken" both used to report git_dirty: null, which
+      // reads exactly like a healthy clean vault. git_error separates them.
+      git_error: gitError,
+      git_dirty: usable ? isDirty() : null,
+      git_dirty_files: usable ? statusPorcelain() : [],
     };
   },
 };
@@ -176,7 +222,7 @@ const vaultStatus: ToolDef = {
 const vaultList: ToolDef = {
   name: "vault_list",
   description:
-    "List notes, filtered by frontmatter type, top-level folder, frontmatter status, or modification date. Set latest=true to get only the newest date-named note in a folder (use this instead of listing a folder and eyeballing the max filename).",
+    "List notes, filtered by frontmatter type, top-level folder, frontmatter status, or modification date. Template notes are excluded unless include_templates=true. Set latest=true to get only the newest date-named note in a folder (use this instead of listing a folder and eyeballing the max filename).",
   inputSchema: {
     type: "object",
     properties: {
@@ -194,7 +240,12 @@ const vaultList: ToolDef = {
         type: "boolean",
         description: "Return only the single newest note by filename. Use for date-named folders.",
       },
-      limit: { type: "number", description: "Maximum notes to return. Default 100." },
+      include_templates: {
+        type: "boolean",
+        description:
+          "Include template notes. Default false — a template carries the same type and status as the real notes it seeds, so it otherwise shows up as, say, an Active project.",
+      },
+      limit: { type: "number", minimum: 1, description: "Maximum notes to return. Default 100." },
     },
     additionalProperties: false,
   },
@@ -204,9 +255,10 @@ const vaultList: ToolDef = {
     const status = str(args, "status");
     const changedSince = str(args, "changed_since");
     const latest = bool(args, "latest");
-    const limit = num(args, "limit") ?? 100;
+    const limit = limitArg(args, 100);
 
     let notes = getIndex().notes;
+    if (!(bool(args, "include_templates") ?? false)) notes = notes.filter((n) => !isTemplate(n));
     if (type) notes = notes.filter((n) => n.type?.toLowerCase() === type.toLowerCase());
     if (status) notes = notes.filter((n) => n.status?.toLowerCase() === status.toLowerCase());
     if (folder) {
@@ -311,6 +363,7 @@ const vaultSearch: ToolDef = {
       folder: { type: "string", description: "Restrict to a top-level folder." },
       limit: {
         type: "number",
+        minimum: 1,
         description:
           "Maximum notes to return. Default 20. The whole vault is always searched; when more matched than were returned the result says so.",
       },
@@ -322,7 +375,7 @@ const vaultSearch: ToolDef = {
     const { hits, total, truncated } = searchVault(req(args, "query"), {
       type: str(args, "type"),
       folder: str(args, "folder"),
-      limit: num(args, "limit") ?? 20,
+      limit: limitArg(args, 20),
     });
     return {
       total_matching_notes: total,
@@ -351,14 +404,14 @@ const vaultLinks: ToolDef = {
         description: "Which relationship to report.",
       },
       note: { type: "string", description: "Note name. Required when direction is in or out." },
-      limit: { type: "number", description: "Maximum entries to return. Default 100." },
+      limit: { type: "number", minimum: 1, description: "Maximum entries to return. Default 100." },
     },
     required: ["direction"],
     additionalProperties: false,
   },
   handler: (args) => {
     const direction = enumArg(args, "direction", DIRECTIONS, true)!;
-    const limit = num(args, "limit") ?? 100;
+    const limit = limitArg(args, 100);
     const graph = buildGraph();
 
     if (direction === "in" || direction === "out") {
@@ -401,7 +454,7 @@ const vaultLinks: ToolDef = {
 const sectionAppend: ToolDef = {
   name: "section_append",
   description:
-    "Append content at the end of a named section of a note — never at the end of the file. If the section holds a markdown table the content must be a pipe-delimited row and is appended as a row. Repeats are skipped by default, so re-running is safe.",
+    "Append content at the end of a named section of a note — never at the end of the file. If the section holds a markdown table the content must be a pipe-delimited row and is appended as a row. Repeats are skipped by default, so re-running is safe. Use keep_newest to cap a bounded log at N entries.",
   inputSchema: {
     type: "object",
     properties: {
@@ -423,6 +476,12 @@ const sectionAppend: ToolDef = {
         type: "boolean",
         description: "Create the section if it does not exist, in template position. Default false.",
       },
+      keep_newest: {
+        type: "number",
+        minimum: 1,
+        description:
+          "Cap the section at this many entries, dropping the oldest. For bounded logs like a review log. Omit to keep everything — most sections are history and should grow.",
+      },
     },
     required: ["note", "section", "content"],
     additionalProperties: false,
@@ -433,8 +492,12 @@ const sectionAppend: ToolDef = {
     const content = req(args, "content");
     const dedupe = bool(args, "dedupe") ?? true;
     const create = bool(args, "create_section") ?? false;
+    const keepNewest = num(args, "keep_newest");
+    if (keepNewest !== undefined && (!Number.isInteger(keepNewest) || keepNewest < 1)) {
+      throw new ToolError(`keep_newest must be a whole number of at least 1; got ${keepNewest}.`);
+    }
 
-    const note = resolveNote(ref);
+    const note = resolveWritable(ref);
     const current = readNote(note);
     let working = current.content;
     let created = false;
@@ -447,6 +510,7 @@ const sectionAppend: ToolDef = {
 
     const result = appendToSection(working, sectionName, content, {
       dedupe,
+      keepNewest,
       notePath: note.path,
     });
     if (!result.changed && !created) {
@@ -467,7 +531,7 @@ function resolveProject(name: string): string {
   const note = findNoteSafe(name);
   if (note) return note.title;
   const projects = getIndex()
-    .notes.filter((n) => n.type === "project" && n.title !== "Template")
+    .notes.filter((n) => n.type === "project" && !isTemplate(n))
     .map((n) => n.title);
   const near = nearestTitles(name, 10).filter((t) => projects.includes(t));
   const list = (near.length ? near : projects).slice(0, 10).join(", ");
@@ -510,7 +574,7 @@ const taskAdd: ToolDef = {
     additionalProperties: false,
   },
   handler: (args) => {
-    const text = req(args, "text");
+    const text = assertPlainTaskText(req(args, "text"));
     const project = str(args, "project");
     const due = str(args, "due");
     const waitingOn = str(args, "waiting_on");
@@ -553,6 +617,28 @@ const taskAdd: ToolDef = {
     return { added: true, section, line };
   },
 };
+
+/**
+ * `text` is the task's wording, not a task line. Accepting a pasted line meant
+ * composeTaskLine prefixed a second checkbox, and any due date or priority
+ * inside the text stayed there instead of populating the fields — so dedupe,
+ * nudging, and every later recompose operated on the wrong data. This is the
+ * class of rule a prose instruction cannot enforce.
+ */
+function assertPlainTaskText(text: string): string {
+  if (/^\s*[-*+]\s*\[[ xX]\]/.test(text)) {
+    throw new ToolError(
+      `text must be the task's wording only, not a whole task line; got "${text}". Drop the leading "- [ ]" — the server composes the line.`,
+    );
+  }
+  const marker = /[\u{1F4C5}\u{2705}\u{23EB}\u{1F53C}\u{1F53D}]/u.exec(text);
+  if (marker) {
+    throw new ToolError(
+      `text must not contain task markers; found "${marker[0]}" in "${text}". Pass the date as due="YYYY-MM-DD" and the priority as priority="high|medium|low" instead.`,
+    );
+  }
+  return text.trim();
+}
 
 /** Waiting-on targets are people; an unresolved person wikilink is acceptable but flagged. */
 function resolveWaitingPerson(name: string): string {
@@ -620,26 +706,46 @@ const taskUpdate: ToolDef = {
     const next: Task = { ...task };
     const done = bool(args, "done");
 
-    if (has(args, "text")) next.text = req(args, "text");
+    if (has(args, "text")) {
+      const replacement = assertPlainTaskText(req(args, "text"));
+      // task_add refuses to create a near-duplicate; rewording one task into
+      // another's wording produced the same collision by the back door, and
+      // left both tasks unaddressable by any match fragment afterwards.
+      const clash = findDuplicate(
+        doc.tasks.filter((t) => t.line !== task.line),
+        replacement,
+      );
+      if (clash) {
+        throw new ToolError(
+          `that wording duplicates an existing task in "${clash.section}": "${clash.raw.trim()}". Pick wording that distinguishes them, or complete one with done=true.`,
+        );
+      }
+      next.text = replacement;
+    }
     if (has(args, "project")) {
-      const value = args.project as string;
+      const value = str(args, "project");
       next.project = value ? resolveProject(value) : undefined;
     }
     if (has(args, "due")) {
-      const value = args.due as string;
+      const value = str(args, "due");
       next.due = value ? assertDate(value, "due") : undefined;
     }
     if (has(args, "priority")) next.priority = enumArg(args, "priority", PRIORITIES)!;
     if (has(args, "waiting_on")) {
-      const value = args.waiting_on as string;
+      const value = str(args, "waiting_on");
       next.waitingOn = value ? resolveWaitingPerson(value) : undefined;
       if (!value) next.waitingSince = undefined;
-      else next.waitingSince = str(args, "waiting_since") ?? next.waitingSince ?? today();
+      else {
+        const since = str(args, "waiting_since");
+        next.waitingSince = since
+          ? assertDate(since, "waiting_since")
+          : (next.waitingSince ?? today());
+      }
     } else if (has(args, "waiting_since")) {
       next.waitingSince = assertDate(req(args, "waiting_since"), "waiting_since");
     }
     if (has(args, "notes")) {
-      const value = args.notes as string;
+      const value = str(args, "notes");
       next.notes = value ? value : undefined;
     }
 
@@ -675,10 +781,12 @@ function has(args: Record<string, unknown>, key: string): boolean {
   return Object.prototype.hasOwnProperty.call(args, key) && args[key] !== null;
 }
 
+const SNAPSHOT_SCOPES = ["machine", "all"] as const;
+
 const vaultSnapshot: ToolDef = {
   name: "vault_snapshot",
   description:
-    "Commit the current vault state to git with a label. Call once before an automated editing pass and once after, so the night's changes are reviewable and revertible. A clean vault is success, not an error.",
+    'Commit the vault to git with a label. scope="machine" (the default) commits only the notes this server has written since the last snapshot, so the pass is revertible without discarding edits you made in Obsidian yourself. scope="all" commits everything currently uncommitted — use it once before an automated pass to park your own in-progress edits in their own commit. A clean vault is success, not an error.',
   inputSchema: {
     type: "object",
     properties: {
@@ -686,11 +794,24 @@ const vaultSnapshot: ToolDef = {
         type: "string",
         description: 'Commit message, e.g. "nightly consolidation 2026-07-31 (pre)".',
       },
+      scope: {
+        type: "string",
+        enum: [...SNAPSHOT_SCOPES],
+        description:
+          'machine: only notes written by this server since the last snapshot. all: every uncommitted change in the vault, including your own. Default machine.',
+      },
     },
     required: ["label"],
     additionalProperties: false,
   },
-  handler: (args) => snapshot(req(args, "label")),
+  handler: (args) => {
+    const scope = enumArg(args, "scope", SNAPSHOT_SCOPES) ?? "machine";
+    const result = snapshot(req(args, "label"), scope === "machine" ? writtenPaths() : undefined);
+    // Either way the machine's outstanding work is now committed; anything
+    // still dirty belongs to the user.
+    clearWrittenPaths();
+    return { ...result, scope };
+  },
 };
 
 // ------------------------------------------------------------------- capture
@@ -698,7 +819,7 @@ const vaultSnapshot: ToolDef = {
 const noteCreate: ToolDef = {
   name: "note_create",
   description:
-    "Create a new note of a given type. The server derives the folder and filename from type plus name, emits the required frontmatter, and lays out the standard sections — never construct a path or write frontmatter by hand. Fill the sections afterwards with section_append. An existing note is never overwritten; the result says so and you should append instead.",
+    "Create a new note of a given type. The server derives the folder and filename from type plus name, emits the required frontmatter, and lays out the standard sections — never construct a path or write frontmatter by hand. Fill the sections afterwards with section_append. An existing note is never overwritten: the call succeeds with created=false and a reason, and you should append to it with section_append instead.",
   inputSchema: {
     type: "object",
     properties: {
@@ -706,7 +827,7 @@ const noteCreate: ToolDef = {
         type: "string",
         enum: [...NOTE_TYPES],
         description:
-          "project -> Projects/X/X.md; person -> People/First Last.md; meeting -> the project's Meeting Notes folder; doc -> the project's Docs folder, for drafts, research, and references; daily -> Daily/DATE.md; synthesis -> Syntheses/DATE.md; knowledge and moc -> Knowledge Base/TOPIC/; shopping -> Shopping/Store.md; idea -> Ideas/X.md.",
+          "project -> Projects/X/X.md; person -> People/First Last.md; meeting -> the project's Meeting Notes folder; doc -> the project's Docs folder, for drafts, research, and references; daily -> Daily/DATE.md; synthesis -> Syntheses/DATE.md; knowledge and moc -> Knowledge Base/TOPIC/; shopping -> Shopping/Store.md; idea -> Ideas/X.md; index -> a folder's own README, e.g. name=\"Knowledge Base\" gives Knowledge Base/README.md.",
       },
       name: {
         type: "string",
@@ -740,6 +861,7 @@ const noteCreate: ToolDef = {
   },
   handler: (args) => {
     const type = enumArg(args, "type", NOTE_TYPES, true)! as NoteType;
+    assertApplicableArgs(type, args);
     const result = createNote({
       type,
       name: str(args, "name"),
@@ -749,10 +871,50 @@ const noteCreate: ToolDef = {
       fields: flatMap(args, "fields"),
       body: str(args, "body"),
     });
-    if (!result.created) throw new ToolError(result.reason!);
+    // A collision is a result, not a failure — the description tells the model
+    // to branch on `created`, and an isError response never reaches that branch.
     return result;
   },
 };
+
+/** Which of the placement arguments each note type actually reads. */
+const APPLICABLE_ARGS: Record<NoteType, readonly string[]> = {
+  project: ["name"],
+  person: ["name"],
+  meeting: ["name", "project", "date"],
+  doc: ["name", "project"],
+  daily: ["date"],
+  synthesis: ["date"],
+  knowledge: ["name", "topic"],
+  moc: ["topic"],
+  shopping: ["name"],
+  idea: ["name"],
+  index: ["name"],
+};
+
+const ARG_HINT: Record<string, string> = {
+  name: 'a moc is titled after its topic (e.g. "Cycling MOC"), and daily and synthesis notes are titled by date. Use type="knowledge" if you meant a note with its own name',
+  project: "only meeting and doc notes live inside a project folder",
+  date: "only daily, synthesis, and meeting notes are placed by date",
+  topic: "only knowledge and moc notes live under a Knowledge Base topic",
+};
+
+/**
+ * An argument the chosen type ignores is a misunderstanding, not a no-op.
+ * `note_create type="moc" name="Cycling Overview"` silently produced a note
+ * titled "Cycling MOC", and the model then wrote a wikilink to a title that
+ * never existed.
+ */
+function assertApplicableArgs(type: NoteType, args: Record<string, unknown>): void {
+  const accepted = APPLICABLE_ARGS[type];
+  for (const key of ["name", "project", "date", "topic"]) {
+    if (accepted.includes(key)) continue;
+    if (str(args, key) === undefined) continue;
+    throw new ToolError(
+      `note_create type="${type}" does not use ${key} — ${ARG_HINT[key]}. Remove ${key} and call again.`,
+    );
+  }
+}
 
 function flatMap(args: Record<string, unknown>, key: string): Record<string, string> | undefined {
   const value = args[key];
@@ -766,7 +928,15 @@ function flatMap(args: Record<string, unknown>, key: string): Record<string, str
     if (typeof v === "object") {
       throw new ToolError(`${key}.${k} must be a string; nested objects and arrays are not supported.`);
     }
-    out[k] = String(v);
+    const value = String(v);
+    // A newline inside a frontmatter value closes the block early and spills
+    // the remainder into the body, above the title.
+    if (/[\r\n]/.test(value)) {
+      throw new ToolError(
+        `${key}.${k} must be a single line — a line break would end the frontmatter block early. Put multi-line prose in body instead.`,
+      );
+    }
+    out[k] = value;
   }
   return out;
 }
@@ -774,7 +944,7 @@ function flatMap(args: Record<string, unknown>, key: string): Record<string, str
 const dailyLog: ToolDef = {
   name: "daily_log",
   description:
-    "Add an entry to the personal daily journal, creating Daily/DATE.md from the template if it does not exist. The daily note is a diary — mood, weather, exercise, media, food, purchases, stray thoughts. Project facts, decisions, meeting notes, and follow-ups do not belong here: route those to section_append on the project note and to task_add. Feelings about a project are journal; the facts about it are not.",
+    "Add an entry to the personal daily journal, creating Daily/DATE.md from the template if it does not exist. Repeats of the same text in the same section are skipped unless dedupe=false. The daily note is a diary — mood, weather, exercise, media, food, purchases, stray thoughts. Project facts, decisions, meeting notes, and follow-ups do not belong here: route those to section_append on the project note and to task_add. Feelings about a project are journal; the facts about it are not.",
   inputSchema: {
     type: "object",
     properties: {
@@ -789,6 +959,11 @@ const dailyLog: ToolDef = {
         description: "The entry, in the user's own wording. One line or a short block.",
       },
       date: { type: "string", description: "YYYY-MM-DD. Defaults to today in the vault's timezone." },
+      dedupe: {
+        type: "boolean",
+        description:
+          "Skip the entry if the same text is already in that section today. Default true. Set false to log something that genuinely happened twice.",
+      },
     },
     required: ["section", "content"],
     additionalProperties: false,
@@ -796,6 +971,7 @@ const dailyLog: ToolDef = {
   handler: (args) => {
     const section = enumArg(args, "section", DAILY_SECTIONS, true)!;
     const content = req(args, "content");
+    const dedupe = bool(args, "dedupe") ?? true;
     const date = str(args, "date") ? assertDate(req(args, "date"), "date") : today();
 
     const daily = ensureDailyNote(date);
@@ -808,7 +984,7 @@ const dailyLog: ToolDef = {
       working = insertSection(working, section, [...DAILY_SECTIONS]);
       created = true;
     }
-    const result = appendToSection(working, section, content, { notePath: note.path });
+    const result = appendToSection(working, section, content, { dedupe, notePath: note.path });
     if (!result.changed && !created) {
       return { path: note.path, section, appended: false, reason: result.reason };
     }
@@ -848,7 +1024,7 @@ const checklistSet: ToolDef = {
     additionalProperties: false,
   },
   handler: (args) => {
-    const note = resolveNote(req(args, "note"));
+    const note = resolveWritable(req(args, "note"));
     const current = readNote(note);
     const result = setChecklistItem(current.content, {
       item: req(args, "item"),
@@ -871,7 +1047,7 @@ const relate: ToolDef = {
   description:
     "Record that two notes are connected, as a line in the target note's `## Related` section. One connection per call. The reason is yours to write and is the point of the tool — a bare link with no reason is noise. Already-linked targets are skipped, so re-running is safe. Capped at " +
     RELATE_CAP +
-    " new links per note per day.",
+    " new links per note per day; a mirrored link counts against the target's cap too, and is skipped once the target is full.",
   inputSchema: {
     type: "object",
     properties: {
@@ -890,10 +1066,13 @@ const relate: ToolDef = {
     additionalProperties: false,
   },
   handler: (args) => {
-    const note = resolveNote(req(args, "note"));
+    const note = resolveWritable(req(args, "note"));
+    // The target is only written when mirroring, so it is guarded only then —
+    // linking *to* Tasks.md from another note's ## Related is harmless.
     const target = resolveNote(req(args, "target"));
     const reason = req(args, "reason").trim();
     const mirror = bool(args, "mirror") ?? false;
+    if (mirror) resolveWritable(target.path);
 
     if (note.path === target.path) {
       throw new ToolError(`"${note.title}" cannot be related to itself.`);
@@ -904,7 +1083,7 @@ const relate: ToolDef = {
       );
     }
 
-    const added = addRelated(note, target.title, reason);
+    const added = addRelated(note, target, reason);
     const result: Record<string, unknown> = {
       note: note.path,
       target: target.title,
@@ -913,11 +1092,18 @@ const relate: ToolDef = {
       ...(added.reason ? { reason_skipped: added.reason } : {}),
     };
     if (mirror) {
-      // The mirror is the same edge seen from the other end, so it does not
-      // consume the target's own daily budget.
-      const back = addRelated(target, note.title, reason, { charge: false });
-      result.mirrored = back.added;
-      if (back.reason) result.mirror_skipped = back.reason;
+      // The mirror is a real link the target has to carry, so it spends the
+      // target's budget too. Exempting it meant a hub note could take an
+      // unbounded number of inbound links in one unattended pass — the exact
+      // bulk-linking the cap exists to prevent.
+      if (relateBudgetRemaining(target.path) <= 0) {
+        result.mirrored = false;
+        result.mirror_skipped = `"${target.path}" has already taken its ${RELATE_CAP} related links today`;
+      } else {
+        const back = addRelated(target, note, reason);
+        result.mirrored = back.added;
+        if (back.reason) result.mirror_skipped = back.reason;
+      }
     }
     return result;
   },
@@ -925,17 +1111,25 @@ const relate: ToolDef = {
 
 function addRelated(
   note: Note,
-  target: string,
+  target: Note,
   reason: string,
-  options: { charge?: boolean } = {},
 ): { added: boolean; reason?: string } {
-  const charge = options.charge ?? true;
   const current = readNote(note);
-  const existing = relatedTargets(current.content).map((t) => t.toLowerCase());
-  if (existing.includes(target.toLowerCase())) {
-    return { added: false, reason: `[[${target}]] is already listed under ## ${RELATED_SECTION}` };
+  // Compare by resolved note, not by link text: the same target may already be
+  // listed in either the bare or the disambiguated form, and a string compare
+  // would miss it and append a duplicate.
+  const existing = new Set<string>();
+  for (const ref of relatedTargets(current.content)) {
+    const found = findNoteSafe(ref);
+    existing.add((found ? found.path : ref).toLowerCase());
   }
-  if (charge && relateBudgetRemaining(note.path) <= 0) {
+  if (existing.has(target.path.toLowerCase()) || existing.has(target.title.toLowerCase())) {
+    return {
+      added: false,
+      reason: `[[${target.title}]] is already listed under ## ${RELATED_SECTION}`,
+    };
+  }
+  if (relateBudgetRemaining(note.path) <= 0) {
     throw new ToolError(
       `"${note.path}" has already taken its ${RELATE_CAP} new related links today. Stop adding links to this note; keep the strongest remaining connection for tomorrow.`,
     );
@@ -944,11 +1138,14 @@ function addRelated(
   if (!findSection(working, RELATED_SECTION)) {
     working = insertSection(working, RELATED_SECTION, templateOrder(note));
   }
-  const result = appendToSection(working, RELATED_SECTION, relatedLine(target, reason), {
-    notePath: note.path,
-  });
+  const result = appendToSection(
+    working,
+    RELATED_SECTION,
+    relatedLine(wikilinkTarget(target), reason),
+    { notePath: note.path },
+  );
   writeNoteGuarded(note.path, current.mtimeMs, result.content);
-  if (charge) spendRelateBudget(note.path);
+  spendRelateBudget(note.path);
   return { added: true };
 }
 
@@ -983,8 +1180,8 @@ const inboxRoute: ToolDef = {
   },
   handler: (args) => {
     const fragment = req(args, "line").trim();
-    const source = resolveNote(str(args, "source_note") ?? "Inbox.md");
-    const destination = resolveNote(req(args, "destination_note"));
+    const source = resolveWritable(str(args, "source_note") ?? "Inbox.md");
+    const destination = resolveWritable(req(args, "destination_note"));
     if (source.path === destination.path) {
       throw new ToolError(`source and destination are the same note (${source.path}).`);
     }
@@ -1083,7 +1280,7 @@ const linkify: ToolDef = {
         type: "boolean",
         description: "true reports the links it would add and writes nothing. Default false.",
       },
-      limit: { type: "number", description: "Maximum changes to list in the report. Default 100." },
+      limit: { type: "number", minimum: 1, description: "Maximum changes to list in the report. Default 100." },
     },
     additionalProperties: false,
   },
@@ -1091,7 +1288,7 @@ const linkify: ToolDef = {
     const ref = str(args, "note");
     const since = str(args, "since");
     const dryRun = bool(args, "dry_run") ?? false;
-    const limit = num(args, "limit") ?? 100;
+    const limit = limitArg(args, 100);
 
     let targets = ref ? [resolveNote(ref)] : getIndex().notes;
     if (!ref && since) {
@@ -1104,17 +1301,189 @@ const linkify: ToolDef = {
     const plan = planLinkify(targets, entities);
     const changes = plan.notes.flatMap((n) => n.changes);
 
+    // Write per note and keep going. A bare loop that threw partway through
+    // left earlier notes written, returned nothing, and surfaced a raw
+    // filesystem error — so the nightly summary under-reported changes that
+    // were actually in the vault. linkify is idempotent, so a retry is safe;
+    // what the caller needs is to know which notes did not land.
+    const written: string[] = [];
+    const failed: { note: string; error: string }[] = [];
     if (!dryRun) {
-      for (const note of plan.notes) writeNoteGuarded(note.path, note.mtimeMs, note.content);
+      for (const note of plan.notes) {
+        try {
+          writeNoteGuarded(note.path, note.mtimeMs, note.content);
+          written.push(note.path);
+        } catch (error) {
+          failed.push({ note: note.path, error: (error as Error).message });
+        }
+      }
     }
+    const applied = dryRun
+      ? []
+      : changes.filter((c) => written.includes(c.note));
     return {
       dry_run: dryRun,
       notes_scanned: plan.scanned,
       entities_considered: plan.entities,
-      notes_changed: plan.notes.length,
-      links_added: dryRun ? 0 : changes.length,
+      notes_changed: dryRun ? plan.notes.length : written.length,
+      links_added: applied.length,
+      ...(failed.length
+        ? {
+            notes_failed: failed,
+            note: `${failed.length} note(s) could not be written and were left unchanged; the rest were applied. linkify is idempotent — call it again to retry.`,
+          }
+        : {}),
       ...truncation(changes.length, Math.min(changes.length, limit), "proposed links"),
       changes: changes.slice(0, limit),
+    };
+  },
+};
+
+const noteSetField: ToolDef = {
+  name: "note_set_field",
+  description:
+    "Change one frontmatter field on an existing note — a project's status, a person's role, a note's topics. Which value is right is your call; the server writes the YAML correctly, quoting wikilink lists so Obsidian still counts them as graph edges. Pass an empty value to remove the field. Only these fields can be set: " +
+    SETTABLE_FIELDS.join(", ") +
+    ". type, created, date, project, and topic decide where the note lives and cannot be changed this way.",
+  inputSchema: {
+    type: "object",
+    properties: {
+      note: { type: "string", description: "Note name or vault-relative path." },
+      field: {
+        type: "string",
+        enum: [...SETTABLE_FIELDS],
+        description: "Frontmatter key to set.",
+      },
+      value: {
+        type: "string",
+        description:
+          'New value. For people and projects, a comma-separated list of note names — they become quoted wikilinks. For topics, aliases, and tags, a comma-separated plain list. Empty string removes the field.',
+      },
+    },
+    required: ["note", "field", "value"],
+    additionalProperties: false,
+  },
+  handler: (args) => {
+    const note = resolveWritable(req(args, "note"));
+    const field = enumArg(args, "field", SETTABLE_FIELDS, true)!;
+    const raw = str(args, "value");
+    const current = readNote(note);
+    const edit = setFrontmatterField(current.content, field, raw ?? null);
+    if (!edit.changed) {
+      return { path: note.path, field, changed: false, reason: "already set to that value" };
+    }
+    writeNoteGuarded(note.path, current.mtimeMs, edit.content);
+    return {
+      path: note.path,
+      field,
+      changed: true,
+      before: edit.before ?? null,
+      cleared: raw === undefined,
+    };
+  },
+};
+
+const STANDUP_FILE = "Standup.md";
+
+const standupWrite: ToolDef = {
+  name: "standup_write",
+  description:
+    "Replace the body of Standup.md with today's standup. This is the one note in the vault that is regenerated rather than appended to — it is derived from the projects, tasks, and people notes, so yesterday's copy is not history worth keeping. Frontmatter is preserved. Nothing else in the vault can be replaced this way.",
+  inputSchema: {
+    type: "object",
+    properties: {
+      content: {
+        type: "string",
+        description:
+          "The standup body in markdown, below the title. Sections and wording are yours to decide.",
+      },
+      date: { type: "string", description: "YYYY-MM-DD. Defaults to today in the vault's timezone." },
+    },
+    required: ["content"],
+    additionalProperties: false,
+  },
+  handler: (args) => {
+    const body = req(args, "content").trim();
+    const date = str(args, "date") ? assertDate(req(args, "date"), "date") : today();
+    const note = resolveNote(STANDUP_FILE);
+    const current = readNote(note);
+    const parsed = parseNote(current.content);
+    const frontmatter = parsed.raw ? `---\n${parsed.raw}\n---\n\n` : "";
+    const next = `${frontmatter}# Standup — ${date}\n\n${body}\n`;
+    if (next === current.content) {
+      return { path: note.path, date, replaced: false, reason: "already identical" };
+    }
+    writeNoteGuarded(note.path, current.mtimeMs, next);
+    return { path: note.path, date, replaced: true, bytes: next.length };
+  },
+};
+
+const inboxClear: ToolDef = {
+  name: "inbox_clear",
+  description:
+    "Remove one line from an inbox note after it has already been captured elsewhere. captured_as must name the note the item now lives in, and that note must exist — this is the only tool that removes a line, and it will not do so on your say-so alone. Use inbox_route when the item still needs writing somewhere; use this only when task_add or note_create has already taken it.",
+  inputSchema: {
+    type: "object",
+    properties: {
+      line: {
+        type: "string",
+        description: "Distinctive fragment of the inbox line to remove. Must match exactly one line.",
+      },
+      captured_as: {
+        type: "string",
+        description:
+          'The existing note this item was captured into, e.g. "Tasks" after task_add, or the knowledge note you just created.',
+      },
+      source_note: {
+        type: "string",
+        description: 'Inbox to clear from. Defaults to "Inbox". Use "Knowledge Base/Inbox.md" for the KB inbox.',
+      },
+    },
+    required: ["line", "captured_as"],
+    additionalProperties: false,
+  },
+  handler: (args) => {
+    const fragment = req(args, "line").trim();
+    const source = resolveNote(str(args, "source_note") ?? "Inbox.md");
+    // Bounded to inboxes on purpose: "remove a line" is safe only where the
+    // note is a queue whose whole purpose is to be emptied.
+    if (source.title.toLowerCase() !== "inbox") {
+      throw new ToolError(
+        `inbox_clear only clears inbox notes; "${source.path}" is not one. Nothing else in the vault removes lines.`,
+      );
+    }
+    const captured = resolveNote(req(args, "captured_as"));
+    if (captured.path === source.path) {
+      throw new ToolError(`captured_as must be the note the item moved to, not ${source.path} itself.`);
+    }
+
+    const current = readNote(source);
+    const lines = current.content.split("\n");
+    const needle = fragment.toLowerCase();
+    const matches = lines
+      .map((text, index) => ({ text, index }))
+      .filter((l) => l.text.trim() !== "" && !l.text.trimStart().startsWith("#"))
+      .filter((l) => l.text.toLowerCase().includes(needle));
+    if (matches.length === 0) {
+      throw new ToolError(
+        `no line in ${source.path} contains "${fragment}". Read the note first to get the exact wording.`,
+      );
+    }
+    if (matches.length > 1) {
+      throw new ToolError(
+        `"${fragment}" matches ${matches.length} lines in ${source.path}: ${matches
+          .map((m) => `"${m.text.trim()}"`)
+          .join("; ")}. Pass a longer fragment.`,
+      );
+    }
+    const match = matches[0];
+    lines.splice(match.index, 1);
+    writeNoteGuarded(source.path, current.mtimeMs, lines.join("\n"));
+    return {
+      cleared: true,
+      from: source.path,
+      captured_as: captured.path,
+      removed_line: match.text.trim(),
     };
   },
 };
@@ -1134,6 +1503,9 @@ export const TOOLS: ToolDef[] = [
   relate,
   inboxRoute,
   linkify,
+  noteSetField,
+  standupWrite,
+  inboxClear,
   vaultSnapshot,
 ];
 

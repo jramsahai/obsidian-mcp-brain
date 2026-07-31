@@ -17,7 +17,7 @@ Use the shared vault conventions and the `obsidian__*` tool surface from `second
 
 Read from:
 
-- `Tasks.md` for checkbox tasks: due dates (`📅`), priorities (`⏫🔼🔽`), waiting states, project wikilinks.
+- `Tasks.md` for checkbox tasks: due dates, priorities, waiting states, project wikilinks. Read it with `obsidian__vault_read note="Tasks"`; a completion date on a line is the record that the work finished.
 - `Projects/*/[Project Name].md` for project status (frontmatter `status:`), blockers, decisions, waiting items, and related tasks.
 - `People/*.md` only when pending conversations or waiting-on people need context.
 - `Inbox.md` for unprocessed actionable captures.
@@ -48,7 +48,7 @@ When asked to run standup, or when invoked by cron:
    - Staleness must come from dated evidence in the notes (due dates, `since` dates, `✅` completions, Conversation Log / Waiting On dates, synthesis mentions). No dated evidence for an item -> leave it out of Stale rather than guessing.
    - pending conversations or follow-ups
    - unprocessed inbox items that look actionable
-7. Write or replace `Standup.md` with the generated standup and timestamp.
+7. `obsidian__standup_write content="…"` with the generated standup. This is the one note in the vault that is replaced rather than appended to.
 8. Reply in the current channel with the same standup, trimmed for readability.
 
 Five or six tool calls should cover a normal standup. If you find yourself making twenty, re-read step 1 — the information is already in hand.
@@ -97,17 +97,13 @@ Be concise, practical, and specific. Prefer action-oriented phrasing over status
 
 ## Updating `Standup.md`
 
-`Standup.md` is regenerated whole each run, so write it with the native file write tool rather than appending. Include:
+`Standup.md` is derived from the projects, tasks, and people notes, so yesterday's copy is not history worth keeping — it is the only note in the vault that is regenerated rather than appended to. `obsidian__standup_write` is the only tool that replaces a note body, and it works on nothing else. Do not reach for a native file write; the global rule in `second-brain` still holds everywhere, including here.
 
-```markdown
-# Standup
-
-Generated: YYYY-MM-DD HH:mm TZ
-
-[standup content]
+```
+obsidian__standup_write content="**Focus**\n- …" date="2026-07-31"
 ```
 
-`TZ` is the local timezone abbreviation from the `second-brain` vault config (e.g. ET for `America/New_York`). Take the date from `obsidian__vault_status`, which already reports it in local time.
+It writes the title and keeps the frontmatter; `content` is everything below the title. `date` defaults to today in the vault's timezone, which `obsidian__vault_status` also reports.
 
 ## Cron Invocation
 

@@ -15497,17 +15497,155 @@ function formatDate(when, timezone) {
   const get = (type) => parts.find((p) => p.type === type)?.value ?? "";
   return `${get("year")}-${get("month")}-${get("day")}`;
 }
-var DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
+var DATE_RE = /^(\d{4})-(\d{2})-(\d{2})$/;
 function assertDate(value, field) {
-  if (!DATE_RE.test(value)) {
+  const match = DATE_RE.exec(value);
+  if (!match) {
     throw new ToolError(
       `${field} must be an exact date in YYYY-MM-DD form; got "${value}". Resolve relative dates like "friday" before calling.`
+    );
+  }
+  const y = Number(match[1]);
+  const m = Number(match[2]);
+  const d = Number(match[3]);
+  const stamp = new Date(Date.UTC(y, m - 1, d));
+  if (stamp.getUTCFullYear() !== y || stamp.getUTCMonth() !== m - 1 || stamp.getUTCDate() !== d) {
+    throw new ToolError(
+      `${field} "${value}" is not a real calendar date. Check the month and day.`
     );
   }
   return value;
 }
 var ToolError = class extends Error {
 };
+
+// src/frontmatter.ts
+var KV_LINE_RE = /^([A-Za-z0-9_][A-Za-z0-9_ -]*):\s*(.*)$/;
+function frontmatterEndLine(lines) {
+  if (lines[0]?.trim() !== "---") return -1;
+  for (let i = 1; i < lines.length; i++) {
+    if (lines[i].trim() === "---") {
+      return looksLikeFrontmatter(lines.slice(1, i)) ? i : -1;
+    }
+  }
+  return -1;
+}
+function looksLikeFrontmatter(inner) {
+  for (const line of inner) {
+    if (!line.trim()) continue;
+    if (line.trimStart().startsWith("#")) continue;
+    if (/^\s*-\s+/.test(line)) continue;
+    if (!KV_LINE_RE.test(line)) return false;
+  }
+  return true;
+}
+function parseNote(content) {
+  const lines = content.split("\n");
+  const end = frontmatterEndLine(lines);
+  if (end === -1) {
+    return { raw: "", data: {}, body: content, bodyStartLine: 0 };
+  }
+  const raw = lines.slice(1, end).join("\n");
+  return {
+    raw,
+    data: parseFrontmatter(raw),
+    body: lines.slice(end + 1).join("\n"),
+    bodyStartLine: end + 1
+  };
+}
+function parseFrontmatter(raw) {
+  const data = {};
+  const lines = raw.split("\n");
+  let currentKey = null;
+  let block = null;
+  const flush = () => {
+    if (currentKey !== null && block !== null) data[currentKey] = block;
+    currentKey = null;
+    block = null;
+  };
+  for (const line of lines) {
+    if (!line.trim() || line.trimStart().startsWith("#")) continue;
+    const listItem = /^\s*-\s+(.*)$/.exec(line);
+    if (listItem && block !== null) {
+      block.push(scalar(listItem[1]));
+      continue;
+    }
+    const kv = /^([A-Za-z0-9_][A-Za-z0-9_ -]*):\s*(.*)$/.exec(line);
+    if (!kv) continue;
+    flush();
+    const [, key, rest] = kv;
+    if (rest === "") {
+      currentKey = key;
+      block = [];
+      data[key] = [];
+      continue;
+    }
+    data[key] = parseValue(rest);
+  }
+  flush();
+  return data;
+}
+function parseValue(rest) {
+  const trimmed = rest.trim();
+  if (trimmed.startsWith("[") && trimmed.endsWith("]")) {
+    const inner = trimmed.slice(1, -1).trim();
+    if (!inner) return [];
+    return splitInline(inner).map((v) => String(scalar(v)));
+  }
+  return scalar(trimmed);
+}
+function splitInline(inner) {
+  const out = [];
+  let depth = 0;
+  let quote = null;
+  let buf = "";
+  for (const ch of inner) {
+    if (quote) {
+      buf += ch;
+      if (ch === quote) quote = null;
+      continue;
+    }
+    if (ch === '"' || ch === "'") {
+      quote = ch;
+      buf += ch;
+      continue;
+    }
+    if (ch === "[") depth++;
+    if (ch === "]") depth--;
+    if (ch === "," && depth === 0) {
+      out.push(buf.trim());
+      buf = "";
+      continue;
+    }
+    buf += ch;
+  }
+  if (buf.trim()) out.push(buf.trim());
+  return out;
+}
+function scalar(value) {
+  let v = value.trim();
+  const comment = /\s+#\s/.exec(v);
+  if (comment && !v.startsWith('"') && !v.startsWith("'")) v = v.slice(0, comment.index).trim();
+  if (v.startsWith('"') && v.endsWith('"') && v.length >= 2 || v.startsWith("'") && v.endsWith("'") && v.length >= 2) {
+    return v.slice(1, -1);
+  }
+  if (v === "true") return true;
+  if (v === "false") return false;
+  if (v === "null" || v === "~" || v === "") return null;
+  if (/^-?\d+$/.test(v)) return Number(v);
+  return v;
+}
+function asString(value) {
+  if (value === void 0 || value === null) return void 0;
+  if (Array.isArray(value)) return value.join(", ");
+  return String(value);
+}
+function asList(value) {
+  if (value === void 0 || value === null) return [];
+  if (Array.isArray(value)) return value;
+  const s = String(value).trim();
+  return s ? [s] : [];
+}
 
 // src/scan.ts
 var FENCE_RE = /^\s*(```+|~~~+)/;
@@ -15546,13 +15684,6 @@ function scanLines(content) {
   }
   return out;
 }
-function frontmatterEndLine(lines) {
-  if (lines[0]?.trim() !== "---") return -1;
-  for (let i = 1; i < lines.length; i++) {
-    if (lines[i].trim() === "---") return i;
-  }
-  return -1;
-}
 var PROTECTED_PATTERNS = [
   /`[^`\n]*`/g,
   // inline code
@@ -15560,8 +15691,12 @@ var PROTECTED_PATTERNS = [
   // existing wikilinks
   /\[[^\][\n]*\]\([^)\n]*\)/g,
   // markdown links and images
-  /(?:https?:\/\/|www\.)[^\s)\]]+/g
+  /(?:https?:\/\/|www\.)[^\s)\]]+/g,
   // bare URLs
+  // Obsidian inline tags. `#` is not a word character, so without this a tag
+  // body reads as a bare mention and linkify brackets it in place — turning
+  // `#Wayfinder` into `#[[Wayfinder]]`, which is no longer a tag at all.
+  /(?:^|\s)#[\w/-]+/g
 ];
 function protectedRanges(line) {
   const ranges = [];
@@ -15614,9 +15749,15 @@ function normalizeHeading(name) {
   return name.replace(/^#+\s*/, "").trim();
 }
 function findSection(content, name) {
+  const explicitLevel = /^(#+)\s/.exec(name.trim())?.[1].length;
   const target = normalizeHeading(name).toLowerCase();
-  const sections = listSections(content);
-  return sections.find((s) => s.name.toLowerCase() === target) ?? null;
+  const matches = listSections(content).filter((s) => s.name.toLowerCase() === target);
+  if (matches.length === 0) return null;
+  if (explicitLevel) {
+    const exact = matches.find((s) => s.level === explicitLevel);
+    if (exact) return exact;
+  }
+  return matches.reduce((best, s) => s.level < best.level ? s : best);
 }
 function requireSection(content, name, notePath) {
   const section = findSection(content, name);
@@ -15640,14 +15781,25 @@ function detectTable(content, section) {
 function splitRow(row) {
   return row.trim().replace(/^\|/, "").replace(/\|$/, "").split("|").map((c) => c.trim());
 }
-function lastContentLine(lines, section) {
-  for (let i = section.end - 1; i >= section.start; i--) {
+function lastContentLine(lines, start, end) {
+  for (let i = end - 1; i >= start; i--) {
     if (lines[i].trim() !== "") return i;
   }
   return -1;
 }
+function ownContentEnd(content, section) {
+  for (const s of listSections(content)) {
+    if (s.headingLine > section.headingLine && s.headingLine < section.end) return s.headingLine;
+  }
+  return section.end;
+}
+function tableEnd(lines, table, limit) {
+  let i = table.headerLine;
+  while (i < limit && lines[i]?.trim().startsWith("|")) i++;
+  return i;
+}
 function appendToSection(content, sectionName, text, options = {}) {
-  const { dedupe = true, notePath = "note" } = options;
+  const { dedupe = true, notePath = "note", keepNewest } = options;
   const section = requireSection(content, sectionName, notePath);
   const lines = content.split("\n");
   const table = detectTable(content, section);
@@ -15670,18 +15822,34 @@ function appendToSection(content, sectionName, text, options = {}) {
       };
     }
   }
-  const last = lastContentLine(lines, section);
-  const insertAt = last === -1 ? section.start : last + 1;
+  const bodyEnd = ownContentEnd(content, section);
+  const last = lastContentLine(lines, section.start, bodyEnd);
+  const insertAt = table ? tableEnd(lines, table, bodyEnd) : last === -1 ? section.start : last + 1;
   const before = lines.slice(0, insertAt);
   const after = lines.slice(insertAt);
   const block = [];
   if (last === -1 && before[before.length - 1]?.trim() !== "") block.push("");
   block.push(insertion);
+  const appended = [...before, ...block, ...after];
   return {
-    content: [...before, ...block, ...after].join("\n"),
+    content: keepNewest ? trimSection(appended, sectionName, keepNewest, table) : appended.join("\n"),
     changed: true,
     asTableRow: Boolean(table)
   };
+}
+function trimSection(lines, sectionName, keep, table) {
+  const content = lines.join("\n");
+  const section = findSection(content, sectionName);
+  if (!section) return content;
+  const bodyEnd = ownContentEnd(content, section);
+  const first = table ? table.headerLine + 2 : section.start;
+  const entries = [];
+  for (let i = first; i < bodyEnd; i++) {
+    if (lines[i].trim() !== "") entries.push(i);
+  }
+  if (entries.length <= keep) return content;
+  const drop = new Set(entries.slice(0, entries.length - keep));
+  return lines.filter((_, i) => !drop.has(i)).join("\n");
 }
 function compare(line) {
   return line.trim().replace(/\s+/g, " ").toLowerCase();
@@ -15812,124 +15980,6 @@ function mergeDetail(existing, incoming) {
   return `${existing}; ${next}`;
 }
 
-// src/frontmatter.ts
-function parseNote(content) {
-  const lines = content.split("\n");
-  if (lines[0]?.trim() !== "---") {
-    return { raw: "", data: {}, body: content, bodyStartLine: 0 };
-  }
-  let end = -1;
-  for (let i = 1; i < lines.length; i++) {
-    if (lines[i].trim() === "---") {
-      end = i;
-      break;
-    }
-  }
-  if (end === -1) {
-    return { raw: "", data: {}, body: content, bodyStartLine: 0 };
-  }
-  const raw = lines.slice(1, end).join("\n");
-  return {
-    raw,
-    data: parseFrontmatter(raw),
-    body: lines.slice(end + 1).join("\n"),
-    bodyStartLine: end + 1
-  };
-}
-function parseFrontmatter(raw) {
-  const data = {};
-  const lines = raw.split("\n");
-  let currentKey = null;
-  let block = null;
-  const flush = () => {
-    if (currentKey !== null && block !== null) data[currentKey] = block;
-    currentKey = null;
-    block = null;
-  };
-  for (const line of lines) {
-    if (!line.trim() || line.trimStart().startsWith("#")) continue;
-    const listItem = /^\s*-\s+(.*)$/.exec(line);
-    if (listItem && block !== null) {
-      block.push(scalar(listItem[1]));
-      continue;
-    }
-    const kv = /^([A-Za-z0-9_][A-Za-z0-9_ -]*):\s*(.*)$/.exec(line);
-    if (!kv) continue;
-    flush();
-    const [, key, rest] = kv;
-    if (rest === "") {
-      currentKey = key;
-      block = [];
-      data[key] = [];
-      continue;
-    }
-    data[key] = parseValue(rest);
-  }
-  flush();
-  return data;
-}
-function parseValue(rest) {
-  const trimmed = rest.trim();
-  if (trimmed.startsWith("[") && trimmed.endsWith("]")) {
-    const inner = trimmed.slice(1, -1).trim();
-    if (!inner) return [];
-    return splitInline(inner).map((v) => String(scalar(v)));
-  }
-  return scalar(trimmed);
-}
-function splitInline(inner) {
-  const out = [];
-  let depth = 0;
-  let quote = null;
-  let buf = "";
-  for (const ch of inner) {
-    if (quote) {
-      buf += ch;
-      if (ch === quote) quote = null;
-      continue;
-    }
-    if (ch === '"' || ch === "'") {
-      quote = ch;
-      buf += ch;
-      continue;
-    }
-    if (ch === "[") depth++;
-    if (ch === "]") depth--;
-    if (ch === "," && depth === 0) {
-      out.push(buf.trim());
-      buf = "";
-      continue;
-    }
-    buf += ch;
-  }
-  if (buf.trim()) out.push(buf.trim());
-  return out;
-}
-function scalar(value) {
-  let v = value.trim();
-  const comment = /\s+#\s/.exec(v);
-  if (comment && !v.startsWith('"') && !v.startsWith("'")) v = v.slice(0, comment.index).trim();
-  if (v.startsWith('"') && v.endsWith('"') && v.length >= 2 || v.startsWith("'") && v.endsWith("'") && v.length >= 2) {
-    return v.slice(1, -1);
-  }
-  if (v === "true") return true;
-  if (v === "false") return false;
-  if (v === "null" || v === "~" || v === "") return null;
-  if (/^-?\d+$/.test(v)) return Number(v);
-  return v;
-}
-function asString(value) {
-  if (value === void 0 || value === null) return void 0;
-  if (Array.isArray(value)) return value.join(", ");
-  return String(value);
-}
-function asList(value) {
-  if (value === void 0 || value === null) return [];
-  if (Array.isArray(value)) return value;
-  const s = String(value).trim();
-  return s ? [s] : [];
-}
-
 // src/vault.ts
 import { readdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { basename, dirname, join, relative, resolve as resolve2, sep } from "node:path";
@@ -15948,8 +15998,21 @@ var GENERIC_NAMES = /* @__PURE__ */ new Set([
 ]);
 var index = null;
 var CACHE_MS = 3e3;
+function lookupKey(value) {
+  return value.normalize("NFC").toLowerCase();
+}
 function invalidateIndex() {
   index = null;
+}
+var written = /* @__PURE__ */ new Set();
+function recordWrite(relPath) {
+  written.add(relPath);
+}
+function writtenPaths() {
+  return [...written];
+}
+function clearWrittenPaths() {
+  written.clear();
 }
 function getIndex() {
   if (index && Date.now() - index.builtAt < CACHE_MS) return index;
@@ -15964,9 +16027,9 @@ function buildIndex() {
   const byPath = /* @__PURE__ */ new Map();
   const byTitle = /* @__PURE__ */ new Map();
   for (const note of notes) {
-    byPath.set(note.path.toLowerCase(), note);
+    byPath.set(lookupKey(note.path), note);
     for (const key of [note.title, ...note.aliases]) {
-      const k = key.toLowerCase();
+      const k = lookupKey(key);
       const list = byTitle.get(k);
       if (list) list.push(note);
       else byTitle.set(k, [note]);
@@ -16018,11 +16081,11 @@ function resolveNote(ref) {
   throw new ToolError(`note "${cleaned}" not found in the vault.${hint}`);
 }
 function nearestTitles(ref, limit = 5) {
-  const needle = stripWikilink(ref).replace(/\.md$/i, "").toLowerCase();
+  const needle = lookupKey(stripWikilink(ref).replace(/\.md$/i, ""));
   if (!needle) return [];
   const scored = [];
   for (const note of getIndex().notes) {
-    const title = note.title.toLowerCase();
+    const title = lookupKey(note.title);
     if (title.includes(needle) || needle.includes(title)) {
       scored.push({ title: note.title, score: 0 });
       continue;
@@ -16055,9 +16118,9 @@ function findNote(ref) {
   if (!cleaned) return null;
   const idx = getIndex();
   const asPath = cleaned.endsWith(".md") ? cleaned : `${cleaned}.md`;
-  const byPath = idx.byPath.get(asPath.toLowerCase());
+  const byPath = idx.byPath.get(lookupKey(asPath));
   if (byPath) return byPath;
-  const titleKey = cleaned.replace(/\.md$/i, "").toLowerCase();
+  const titleKey = lookupKey(cleaned.replace(/\.md$/i, ""));
   const byTitle = idx.byTitle.get(titleKey);
   if (byTitle && byTitle.length === 1) return byTitle[0];
   if (byTitle && byTitle.length > 1) {
@@ -16084,6 +16147,13 @@ function preferAmong(titleKey, matches) {
 function isTemplate(note) {
   return note.frontmatter?.template === true;
 }
+function titleMatchCount(title) {
+  return getIndex().byTitle.get(lookupKey(title))?.length ?? 0;
+}
+function wikilinkTarget(note) {
+  if (titleMatchCount(note.title) <= 1) return note.title;
+  return `${note.path.replace(/\.md$/i, "")}|${note.title}`;
+}
 function stripWikilink(ref) {
   let value = ref.trim();
   const link = /^\[\[([^\]]+)\]\]$/.exec(value);
@@ -16103,8 +16173,9 @@ function absolutePath(note) {
 function readNote(note) {
   const full = absolutePath(note);
   try {
+    const mtimeMs = statSync(full).mtimeMs;
     const content = readFileSync(full, "utf8");
-    return { content, mtimeMs: statSync(full).mtimeMs, path: full };
+    return { content, mtimeMs, path: full };
   } catch {
     throw new ToolError(`could not read "${typeof note === "string" ? note : note.path}".`);
   }
@@ -16118,6 +16189,7 @@ function writeNoteGuarded(relPath, expectedMtimeMs, content) {
     );
   }
   writeFileSync(full, content, "utf8");
+  recordWrite(relPath);
   invalidateIndex();
 }
 
@@ -16279,12 +16351,25 @@ var COMMON_WORDS = /* @__PURE__ */ new Set([
   "autumn"
 ]);
 function buildEntities(notes = getIndex().notes) {
+  const owners = /* @__PURE__ */ new Map();
+  for (const note of notes) {
+    for (const key of [note.title, ...note.aliases]) {
+      const k = key.trim().toLowerCase();
+      const set = owners.get(k) ?? /* @__PURE__ */ new Set();
+      set.add(note.path);
+      owners.set(k, set);
+    }
+  }
+  const unique = (name) => (owners.get(name.trim().toLowerCase())?.size ?? 0) <= 1;
   const entities = [];
   for (const note of notes) {
     if (!note.type || !LINKABLE_TYPES.has(note.type)) continue;
     if (isTemplate(note)) continue;
+    if (!unique(note.title)) continue;
     for (const phrase of [note.title, ...note.aliases]) {
-      if (eligible(phrase)) entities.push({ phrase, title: note.title, path: note.path });
+      if (eligible(phrase) && unique(phrase)) {
+        entities.push({ phrase, title: note.title, path: note.path });
+      }
     }
   }
   return entities.sort((a, b) => b.phrase.length - a.phrase.length);
@@ -16372,7 +16457,8 @@ var NOTE_TYPES = [
   "knowledge",
   "moc",
   "shopping",
-  "idea"
+  "idea",
+  "index"
 ];
 var DAILY_SECTIONS = [
   "Mood / Energy",
@@ -16443,7 +16529,7 @@ function buildNote(spec) {
     }
     case "meeting": {
       const name = requireName(spec, "meeting");
-      const project = requireProject(spec);
+      const project = requireProject(spec, "meeting");
       return assemble({
         path: `Projects/${project}/Meeting Notes/${name}.md`,
         title: name,
@@ -16463,7 +16549,7 @@ function buildNote(spec) {
     }
     case "doc": {
       const name = requireName(spec, "doc");
-      const project = requireProject(spec);
+      const project = requireProject(spec, "doc");
       return assemble({
         path: `Projects/${project}/Docs/${name}.md`,
         title: name,
@@ -16567,6 +16653,22 @@ function buildNote(spec) {
         body: spec.body ?? `Items to pick up next time at ${name}. Check off when bought; clear checked items periodically.`
       });
     }
+    case "index": {
+      const folder = requireName(spec, "index");
+      return assemble({
+        path: `${folder}/README.md`,
+        title: "README",
+        type: "index",
+        heading: `${folder}`,
+        frontmatter: [
+          ["type", "index"],
+          ["created", created]
+        ],
+        sections: ["Overview", "Review Log"],
+        fields,
+        body: spec.body
+      });
+    }
     case "idea": {
       const name = requireName(spec, "idea");
       return assemble({
@@ -16610,6 +16712,17 @@ function requireName(spec, type) {
     );
   }
   const name = raw.replace(/\.md$/i, "").trim();
+  const illegal = /[[\]#|^]/.exec(name);
+  if (illegal) {
+    throw new ToolError(
+      `name may not contain "${illegal[0]}" \u2014 it would break the [[wikilink]] to this note; got "${name}". Use a plain name, e.g. "C Sharp Basics" rather than "C# Basics".`
+    );
+  }
+  if (/[\u0000-\u001f\u007f]/.test(name)) {
+    throw new ToolError(
+      `name may not contain line breaks or control characters; got ${JSON.stringify(name)}.`
+    );
+  }
   if (GENERIC_NAMES.has(name.toLowerCase())) {
     throw new ToolError(
       `"${name}" is too generic to be a note name \u2014 a wikilink to it would be ambiguous. Name the note after the thing it is about, e.g. the project, person, or topic name.`
@@ -16620,13 +16733,22 @@ function requireName(spec, type) {
   }
   return name;
 }
-function requireProject(spec) {
+function requireProject(spec, type) {
   const raw = (spec.project ?? "").trim();
-  if (!raw) throw new ToolError("project is required for a meeting note \u2014 meeting notes live inside the project folder.");
+  if (!raw) {
+    throw new ToolError(
+      `project is required for a ${type} note \u2014 ${type} notes live inside the project folder.`
+    );
+  }
   const note = safeFind(raw);
   if (!note || note.type !== "project") {
     throw new ToolError(
       `project "${raw}" has no project note in the vault, so [[${raw}]] would not resolve. Create the project note first with note_create type="project".`
+    );
+  }
+  if (isTemplate(note)) {
+    throw new ToolError(
+      `"${note.title}" is a template, not a real project. Create the project first with note_create type="project", then file the ${type} note under it.`
     );
   }
   return note.title;
@@ -16638,7 +16760,13 @@ function requireTopic(spec) {
       'topic is required for knowledge and moc notes \u2014 it is the Knowledge Base folder path, e.g. "Vehicles" or "Cycling/Repair".'
     );
   }
-  if (raw.startsWith("..") || raw.includes("//")) throw new ToolError(`topic "${raw}" is not a valid folder path.`);
+  const segments = raw.split("/");
+  const bad = segments.find((s) => s === "" || s.startsWith("."));
+  if (bad !== void 0) {
+    throw new ToolError(
+      `topic "${raw}" is not a valid folder path \u2014 "${bad || "(empty)"}" is not a usable folder name. Use plain folder names, e.g. "Vehicles" or "Cycling/Repair".`
+    );
+  }
   return raw;
 }
 function safeFind(ref) {
@@ -16677,7 +16805,13 @@ function renderValue(key, value) {
   if (value.startsWith("[") || value.startsWith('"')) return value;
   if (WIKILINK_LIST_KEYS.has(key)) return `[${splitList(value).map(quoteLink).join(", ")}]`;
   if (PLAIN_LIST_KEYS.has(key)) return `[${splitList(value).join(", ")}]`;
-  return value;
+  return quoteScalar(value);
+}
+function quoteScalar(value) {
+  if (value === "") return value;
+  const needsQuote = /:\s/.test(value) || value.endsWith(":") || /\s#/.test(value) || /^[#[\]{}&*!|>%@`'"?,-]/.test(value);
+  if (!needsQuote) return value;
+  return `"${value.replace(/\\/g, "\\\\").replace(/"/g, '\\"')}"`;
 }
 function splitList(value) {
   return value.split(",").map((v) => v.trim()).filter(Boolean);
@@ -16685,6 +16819,50 @@ function splitList(value) {
 function quoteLink(value) {
   const inner = value.replace(/^\[\[/, "").replace(/\]\]$/, "").trim();
   return `"[[${inner}]]"`;
+}
+var SETTABLE_FIELDS = [
+  "status",
+  "role",
+  "started",
+  "due",
+  "source",
+  "topics",
+  "people",
+  "projects",
+  "aliases",
+  "tags"
+];
+var FM_KEY_RE = /^([A-Za-z0-9_][A-Za-z0-9_ -]*):/;
+function setFrontmatterField(content, key, value) {
+  const lines = content.split("\n");
+  const end = frontmatterEndLine(lines);
+  if (end === -1) {
+    throw new ToolError(
+      "this note has no frontmatter block, so there is no field to set. Notes created by note_create always have one."
+    );
+  }
+  let at = -1;
+  for (let i = 1; i < end; i++) {
+    const match = FM_KEY_RE.exec(lines[i]);
+    if (match && match[1].trim().toLowerCase() === key.toLowerCase()) {
+      at = i;
+      break;
+    }
+  }
+  let stop = at + 1;
+  if (at !== -1) while (stop < end && /^\s*-\s+/.test(lines[stop])) stop++;
+  const before = at === -1 ? void 0 : lines.slice(at, stop).join("\n");
+  const rendered = value === null ? null : `${key}: ${renderValue(key, value)}`;
+  if (at === -1) {
+    if (rendered === null) return { content, changed: false };
+    const next2 = [...lines];
+    next2.splice(end, 0, rendered);
+    return { content: next2.join("\n"), changed: true };
+  }
+  if (rendered === before) return { content, changed: false, before };
+  const next = [...lines];
+  next.splice(at, stop - at, ...rendered === null ? [] : [rendered]);
+  return { content: next.join("\n"), changed: true, before };
 }
 function createNote(spec) {
   const note = buildNote(spec);
@@ -16704,6 +16882,7 @@ function createNote(spec) {
   }
   mkdirSync(dirname2(full), { recursive: true });
   writeFileSync2(full, note.content, "utf8");
+  recordWrite(note.path);
   invalidateIndex();
   return {
     created: true,
@@ -16761,7 +16940,7 @@ var CHECKBOX_RE2 = /^(\s*)- \[( |x|X)\]\s+(.*)$/;
 var DUE_RE = /📅\s*(\d{4}-\d{2}-\d{2})/;
 var DONE_RE = /✅\s*(\d{4}-\d{2}-\d{2})/;
 var WAITING_RE = /\(waiting on:\s*\[\[([^\]]+)\]\](?:\s*since\s*(\d{4}-\d{2}-\d{2}))?\)/i;
-var LINK_RE = /\[\[([^\]]+)\]\]/;
+var TRAILING_LINK_RE = /\s*\[\[([^\][\n]+)\]\]\s*$/;
 var NOTES_RE = /\s+—\s+(.*)$/;
 function parseTaskLine(raw, line, section) {
   const match = CHECKBOX_RE2.exec(raw);
@@ -16788,14 +16967,16 @@ function parseTaskLine(raw, line, section) {
       rest = rest.split(marker).join(" ");
     }
   }
-  const linkMatch = LINK_RE.exec(rest);
+  rest = rest.trimEnd();
+  const linkMatch = TRAILING_LINK_RE.exec(rest);
   const project = linkMatch ? linkMatch[1].split("|")[0].trim() : void 0;
-  if (linkMatch) rest = rest.replace(LINK_RE, " ");
+  if (linkMatch) rest = rest.slice(0, linkMatch.index);
   const text = rest.replace(/\s+/g, " ").trim();
   return {
     line,
     raw,
     section,
+    indent: match[1],
     done,
     text,
     project,
@@ -16808,7 +16989,7 @@ function parseTaskLine(raw, line, section) {
   };
 }
 function composeTaskLine(task) {
-  const parts = [`- [${task.done ? "x" : " "}]`, task.text.trim()];
+  const parts = [`${task.indent ?? ""}- [${task.done ? "x" : " "}]`, task.text.trim()];
   if (task.project) parts.push(`[[${task.project}]]`);
   if (task.due) parts.push(`\u{1F4C5} ${task.due}`);
   if (task.priority && task.priority !== "none") {
@@ -16865,6 +17046,7 @@ function findDuplicate(tasks, text) {
   });
 }
 function insertTaskLine(doc, sectionName, line) {
+  const payload = Array.isArray(line) ? line : [line];
   const section = requireTaskSection(doc, sectionName);
   const lines = [...doc.lines];
   let insertAt = section.start;
@@ -16874,9 +17056,18 @@ function insertTaskLine(doc, sectionName, line) {
       break;
     }
   }
-  const block = insertAt === section.start && lines[insertAt - 1]?.trim() !== "" ? ["", line] : [line];
+  const block = insertAt === section.start && lines[insertAt - 1]?.trim() !== "" ? ["", ...payload] : payload;
   lines.splice(insertAt, 0, ...block);
   return lines;
+}
+function indentWidth(line) {
+  return (/^[ \t]*/.exec(line)?.[0] ?? "").replace(/\t/g, "    ").length;
+}
+function taskBlockEnd(lines, fromLine) {
+  const base = indentWidth(lines[fromLine]);
+  let end = fromLine + 1;
+  while (end < lines.length && lines[end].trim() !== "" && indentWidth(lines[end]) > base) end++;
+  return end;
 }
 function moveTaskLine(lines, fromLine, newText, toSection) {
   const next = [...lines];
@@ -16884,9 +17075,11 @@ function moveTaskLine(lines, fromLine, newText, toSection) {
     next[fromLine] = newText;
     return next;
   }
-  next.splice(fromLine, 1);
+  const blockEnd = taskBlockEnd(next, fromLine);
+  const children = next.slice(fromLine + 1, blockEnd);
+  next.splice(fromLine, blockEnd - fromLine);
   const doc = parseTasksDoc(next.join("\n"));
-  return insertTaskLine(doc, toSection, newText);
+  return insertTaskLine(doc, toSection, [newText, ...children]);
 }
 
 // src/git.ts
@@ -16913,21 +17106,40 @@ function gitAvailable() {
     return false;
   }
 }
-function statusPorcelain() {
-  return git(["status", "--porcelain"]).split("\n").filter(Boolean);
+function gitDiagnosis() {
+  const cfg = config2();
+  if (!cfg.gitEnabled) return null;
+  if (gitAvailable()) return null;
+  return `git is enabled (VAULT_GIT=1) but unusable: "${cfg.vaultRoot}" is not a git repository, or the binary at VAULT_GIT_BIN="${cfg.gitBinary}" is missing. Snapshots will fail until this is fixed.`;
+}
+function statusPorcelain(paths = []) {
+  const args = ["status", "--porcelain", "-uall"];
+  if (paths.length) args.push("--", ...paths);
+  return git(args).split("\n").filter(Boolean);
 }
 function isDirty() {
   return statusPorcelain().length > 0;
 }
-function snapshot(label) {
-  if (!config2().gitEnabled) {
+function snapshot(label, paths) {
+  const cfg = config2();
+  if (!cfg.gitEnabled) {
     throw new ToolError("git snapshots are disabled; set VAULT_GIT=1 in the server env to enable.");
   }
-  const dirty = statusPorcelain();
+  const broken = gitDiagnosis();
+  if (broken) throw new ToolError(broken);
+  const scoped = paths !== void 0;
+  if (scoped && paths.length === 0) {
+    return {
+      committed: false,
+      files_changed: 0,
+      message: "nothing to commit \u2014 this server has written no notes since the last snapshot"
+    };
+  }
+  const dirty = statusPorcelain(scoped ? paths : []);
   if (dirty.length === 0) {
     return { committed: false, files_changed: 0, message: "nothing to commit \u2014 vault already clean" };
   }
-  git(["add", "-A"]);
+  git(scoped ? ["add", "-A", "--", ...paths] : ["add", "-A"]);
   git(["commit", "-m", label]);
   const sha = git(["rev-parse", "--short", "HEAD"]);
   return {
@@ -16968,6 +17180,14 @@ function num(args, key) {
   if (!Number.isFinite(n)) throw new ToolError(`${key} must be a number.`);
   return n;
 }
+function limitArg(args, fallback) {
+  const value = num(args, "limit");
+  if (value === void 0) return fallback;
+  if (!Number.isInteger(value) || value < 1) {
+    throw new ToolError(`limit must be a whole number of at least 1; got ${value}.`);
+  }
+  return value;
+}
 function enumArg(args, key, allowed, required2 = false) {
   const value = str(args, key, required2);
   if (value === void 0) return void 0;
@@ -16993,9 +17213,23 @@ function findNoteSafe(ref) {
     return null;
   }
 }
+function resolveWritable(ref, options = {}) {
+  const note = resolveNote(ref);
+  if (isTemplate(note)) {
+    throw new ToolError(
+      `"${note.path}" is a template \u2014 writing to it would contaminate every note later created from it. Create the real note with note_create first, then write to that.`
+    );
+  }
+  if (!options.allowTasks && note.path === TASKS_FILE) {
+    throw new ToolError(
+      `${TASKS_FILE} has a positional grammar and is owned by task_add and task_update; a line written into it directly is not a task those tools can parse or move. Use task_add to add a task, or task_update to change one.`
+    );
+  }
+  return note;
+}
 var vaultStatus = {
   name: "vault_status",
-  description: "Vault orientation in one call: today's local date, git dirty state, note counts by type, latest synthesis and daily note, unresolved/orphan link counts, and notes changed in the last 24 hours. Call this first in any standup or nightly run instead of exploring the vault by hand.",
+  description: "Vault orientation in one call: today's local date, git dirty state, note counts by type, latest synthesis and daily note, unresolved/orphan link counts, and notes changed in the last 24 hours. Call this first in any standup or nightly run instead of exploring the vault by hand. git_error is non-null when git is enabled but unusable \u2014 snapshots will fail until it is fixed.",
   inputSchema: { type: "object", properties: {}, additionalProperties: false },
   handler: () => {
     const cfg = config2();
@@ -17011,6 +17245,8 @@ var vaultStatus = {
     );
     const cutoff = Date.now() - 24 * 60 * 60 * 1e3;
     const changed = idx.notes.filter((n) => n.mtimeMs >= cutoff).map((n) => n.path);
+    const gitError = gitDiagnosis();
+    const usable = cfg.gitEnabled && gitError === null;
     const latestIn = (folder) => idx.notes.filter((n) => n.path.startsWith(`${folder}/`) && /\d{4}-\d{2}-\d{2}/.test(n.title)).map((n) => n.title).sort().pop() ?? null;
     return {
       today: today(cfg),
@@ -17023,14 +17259,17 @@ var vaultStatus = {
       orphan_count: orphans.length,
       changed_last_24h: changed,
       git_enabled: cfg.gitEnabled,
-      git_dirty: cfg.gitEnabled && gitAvailable() ? isDirty() : null,
-      git_dirty_files: cfg.gitEnabled && gitAvailable() ? statusPorcelain() : []
+      // "off" and "on but broken" both used to report git_dirty: null, which
+      // reads exactly like a healthy clean vault. git_error separates them.
+      git_error: gitError,
+      git_dirty: usable ? isDirty() : null,
+      git_dirty_files: usable ? statusPorcelain() : []
     };
   }
 };
 var vaultList = {
   name: "vault_list",
-  description: "List notes, filtered by frontmatter type, top-level folder, frontmatter status, or modification date. Set latest=true to get only the newest date-named note in a folder (use this instead of listing a folder and eyeballing the max filename).",
+  description: "List notes, filtered by frontmatter type, top-level folder, frontmatter status, or modification date. Template notes are excluded unless include_templates=true. Set latest=true to get only the newest date-named note in a folder (use this instead of listing a folder and eyeballing the max filename).",
   inputSchema: {
     type: "object",
     properties: {
@@ -17048,7 +17287,11 @@ var vaultList = {
         type: "boolean",
         description: "Return only the single newest note by filename. Use for date-named folders."
       },
-      limit: { type: "number", description: "Maximum notes to return. Default 100." }
+      include_templates: {
+        type: "boolean",
+        description: "Include template notes. Default false \u2014 a template carries the same type and status as the real notes it seeds, so it otherwise shows up as, say, an Active project."
+      },
+      limit: { type: "number", minimum: 1, description: "Maximum notes to return. Default 100." }
     },
     additionalProperties: false
   },
@@ -17058,8 +17301,9 @@ var vaultList = {
     const status = str(args, "status");
     const changedSince = str(args, "changed_since");
     const latest = bool(args, "latest");
-    const limit = num(args, "limit") ?? 100;
+    const limit = limitArg(args, 100);
     let notes = getIndex().notes;
+    if (!(bool(args, "include_templates") ?? false)) notes = notes.filter((n) => !isTemplate(n));
     if (type) notes = notes.filter((n) => n.type?.toLowerCase() === type.toLowerCase());
     if (status) notes = notes.filter((n) => n.status?.toLowerCase() === status.toLowerCase());
     if (folder) {
@@ -17150,6 +17394,7 @@ var vaultSearch = {
       folder: { type: "string", description: "Restrict to a top-level folder." },
       limit: {
         type: "number",
+        minimum: 1,
         description: "Maximum notes to return. Default 20. The whole vault is always searched; when more matched than were returned the result says so."
       }
     },
@@ -17160,7 +17405,7 @@ var vaultSearch = {
     const { hits, total, truncated } = searchVault(req(args, "query"), {
       type: str(args, "type"),
       folder: str(args, "folder"),
-      limit: num(args, "limit") ?? 20
+      limit: limitArg(args, 20)
     });
     return {
       total_matching_notes: total,
@@ -17184,14 +17429,14 @@ var vaultLinks = {
         description: "Which relationship to report."
       },
       note: { type: "string", description: "Note name. Required when direction is in or out." },
-      limit: { type: "number", description: "Maximum entries to return. Default 100." }
+      limit: { type: "number", minimum: 1, description: "Maximum entries to return. Default 100." }
     },
     required: ["direction"],
     additionalProperties: false
   },
   handler: (args) => {
     const direction = enumArg(args, "direction", DIRECTIONS, true);
-    const limit = num(args, "limit") ?? 100;
+    const limit = limitArg(args, 100);
     const graph = buildGraph();
     if (direction === "in" || direction === "out") {
       const ref = str(args, "note");
@@ -17227,7 +17472,7 @@ var vaultLinks = {
 };
 var sectionAppend = {
   name: "section_append",
-  description: "Append content at the end of a named section of a note \u2014 never at the end of the file. If the section holds a markdown table the content must be a pipe-delimited row and is appended as a row. Repeats are skipped by default, so re-running is safe.",
+  description: "Append content at the end of a named section of a note \u2014 never at the end of the file. If the section holds a markdown table the content must be a pipe-delimited row and is appended as a row. Repeats are skipped by default, so re-running is safe. Use keep_newest to cap a bounded log at N entries.",
   inputSchema: {
     type: "object",
     properties: {
@@ -17247,6 +17492,11 @@ var sectionAppend = {
       create_section: {
         type: "boolean",
         description: "Create the section if it does not exist, in template position. Default false."
+      },
+      keep_newest: {
+        type: "number",
+        minimum: 1,
+        description: "Cap the section at this many entries, dropping the oldest. For bounded logs like a review log. Omit to keep everything \u2014 most sections are history and should grow."
       }
     },
     required: ["note", "section", "content"],
@@ -17258,7 +17508,11 @@ var sectionAppend = {
     const content = req(args, "content");
     const dedupe = bool(args, "dedupe") ?? true;
     const create = bool(args, "create_section") ?? false;
-    const note = resolveNote(ref);
+    const keepNewest = num(args, "keep_newest");
+    if (keepNewest !== void 0 && (!Number.isInteger(keepNewest) || keepNewest < 1)) {
+      throw new ToolError(`keep_newest must be a whole number of at least 1; got ${keepNewest}.`);
+    }
+    const note = resolveWritable(ref);
     const current = readNote(note);
     let working = current.content;
     let created = false;
@@ -17269,6 +17523,7 @@ var sectionAppend = {
     }
     const result = appendToSection(working, sectionName, content, {
       dedupe,
+      keepNewest,
       notePath: note.path
     });
     if (!result.changed && !created) {
@@ -17287,7 +17542,7 @@ var sectionAppend = {
 function resolveProject(name) {
   const note = findNoteSafe(name);
   if (note) return note.title;
-  const projects = getIndex().notes.filter((n) => n.type === "project" && n.title !== "Template").map((n) => n.title);
+  const projects = getIndex().notes.filter((n) => n.type === "project" && !isTemplate(n)).map((n) => n.title);
   const near = nearestTitles(name, 10).filter((t) => projects.includes(t));
   const list = (near.length ? near : projects).slice(0, 10).join(", ");
   throw new ToolError(
@@ -17327,7 +17582,7 @@ var taskAdd = {
     additionalProperties: false
   },
   handler: (args) => {
-    const text = req(args, "text");
+    const text = assertPlainTaskText(req(args, "text"));
     const project = str(args, "project");
     const due = str(args, "due");
     const waitingOn = str(args, "waiting_on");
@@ -17364,6 +17619,20 @@ var taskAdd = {
     return { added: true, section, line };
   }
 };
+function assertPlainTaskText(text) {
+  if (/^\s*[-*+]\s*\[[ xX]\]/.test(text)) {
+    throw new ToolError(
+      `text must be the task's wording only, not a whole task line; got "${text}". Drop the leading "- [ ]" \u2014 the server composes the line.`
+    );
+  }
+  const marker = /[\u{1F4C5}\u{2705}\u{23EB}\u{1F53C}\u{1F53D}]/u.exec(text);
+  if (marker) {
+    throw new ToolError(
+      `text must not contain task markers; found "${marker[0]}" in "${text}". Pass the date as due="YYYY-MM-DD" and the priority as priority="high|medium|low" instead.`
+    );
+  }
+  return text.trim();
+}
 function resolveWaitingPerson(name) {
   const note = findNoteSafe(name);
   return note ? note.title : name;
@@ -17422,26 +17691,41 @@ var taskUpdate = {
     const task = candidates[0];
     const next = { ...task };
     const done = bool(args, "done");
-    if (has(args, "text")) next.text = req(args, "text");
+    if (has(args, "text")) {
+      const replacement = assertPlainTaskText(req(args, "text"));
+      const clash = findDuplicate(
+        doc.tasks.filter((t) => t.line !== task.line),
+        replacement
+      );
+      if (clash) {
+        throw new ToolError(
+          `that wording duplicates an existing task in "${clash.section}": "${clash.raw.trim()}". Pick wording that distinguishes them, or complete one with done=true.`
+        );
+      }
+      next.text = replacement;
+    }
     if (has(args, "project")) {
-      const value = args.project;
+      const value = str(args, "project");
       next.project = value ? resolveProject(value) : void 0;
     }
     if (has(args, "due")) {
-      const value = args.due;
+      const value = str(args, "due");
       next.due = value ? assertDate(value, "due") : void 0;
     }
     if (has(args, "priority")) next.priority = enumArg(args, "priority", PRIORITIES);
     if (has(args, "waiting_on")) {
-      const value = args.waiting_on;
+      const value = str(args, "waiting_on");
       next.waitingOn = value ? resolveWaitingPerson(value) : void 0;
       if (!value) next.waitingSince = void 0;
-      else next.waitingSince = str(args, "waiting_since") ?? next.waitingSince ?? today();
+      else {
+        const since = str(args, "waiting_since");
+        next.waitingSince = since ? assertDate(since, "waiting_since") : next.waitingSince ?? today();
+      }
     } else if (has(args, "waiting_since")) {
       next.waitingSince = assertDate(req(args, "waiting_since"), "waiting_since");
     }
     if (has(args, "notes")) {
-      const value = args.notes;
+      const value = str(args, "notes");
       next.notes = value ? value : void 0;
     }
     let targetSection = enumArg(args, "section", TASK_SECTIONS);
@@ -17473,32 +17757,43 @@ var taskUpdate = {
 function has(args, key) {
   return Object.prototype.hasOwnProperty.call(args, key) && args[key] !== null;
 }
+var SNAPSHOT_SCOPES = ["machine", "all"];
 var vaultSnapshot = {
   name: "vault_snapshot",
-  description: "Commit the current vault state to git with a label. Call once before an automated editing pass and once after, so the night's changes are reviewable and revertible. A clean vault is success, not an error.",
+  description: 'Commit the vault to git with a label. scope="machine" (the default) commits only the notes this server has written since the last snapshot, so the pass is revertible without discarding edits you made in Obsidian yourself. scope="all" commits everything currently uncommitted \u2014 use it once before an automated pass to park your own in-progress edits in their own commit. A clean vault is success, not an error.',
   inputSchema: {
     type: "object",
     properties: {
       label: {
         type: "string",
         description: 'Commit message, e.g. "nightly consolidation 2026-07-31 (pre)".'
+      },
+      scope: {
+        type: "string",
+        enum: [...SNAPSHOT_SCOPES],
+        description: "machine: only notes written by this server since the last snapshot. all: every uncommitted change in the vault, including your own. Default machine."
       }
     },
     required: ["label"],
     additionalProperties: false
   },
-  handler: (args) => snapshot(req(args, "label"))
+  handler: (args) => {
+    const scope = enumArg(args, "scope", SNAPSHOT_SCOPES) ?? "machine";
+    const result = snapshot(req(args, "label"), scope === "machine" ? writtenPaths() : void 0);
+    clearWrittenPaths();
+    return { ...result, scope };
+  }
 };
 var noteCreate = {
   name: "note_create",
-  description: "Create a new note of a given type. The server derives the folder and filename from type plus name, emits the required frontmatter, and lays out the standard sections \u2014 never construct a path or write frontmatter by hand. Fill the sections afterwards with section_append. An existing note is never overwritten; the result says so and you should append instead.",
+  description: "Create a new note of a given type. The server derives the folder and filename from type plus name, emits the required frontmatter, and lays out the standard sections \u2014 never construct a path or write frontmatter by hand. Fill the sections afterwards with section_append. An existing note is never overwritten: the call succeeds with created=false and a reason, and you should append to it with section_append instead.",
   inputSchema: {
     type: "object",
     properties: {
       type: {
         type: "string",
         enum: [...NOTE_TYPES],
-        description: "project -> Projects/X/X.md; person -> People/First Last.md; meeting -> the project's Meeting Notes folder; doc -> the project's Docs folder, for drafts, research, and references; daily -> Daily/DATE.md; synthesis -> Syntheses/DATE.md; knowledge and moc -> Knowledge Base/TOPIC/; shopping -> Shopping/Store.md; idea -> Ideas/X.md."
+        description: `project -> Projects/X/X.md; person -> People/First Last.md; meeting -> the project's Meeting Notes folder; doc -> the project's Docs folder, for drafts, research, and references; daily -> Daily/DATE.md; synthesis -> Syntheses/DATE.md; knowledge and moc -> Knowledge Base/TOPIC/; shopping -> Shopping/Store.md; idea -> Ideas/X.md; index -> a folder's own README, e.g. name="Knowledge Base" gives Knowledge Base/README.md.`
       },
       name: {
         type: "string",
@@ -17528,6 +17823,7 @@ var noteCreate = {
   },
   handler: (args) => {
     const type = enumArg(args, "type", NOTE_TYPES, true);
+    assertApplicableArgs(type, args);
     const result = createNote({
       type,
       name: str(args, "name"),
@@ -17537,10 +17833,38 @@ var noteCreate = {
       fields: flatMap(args, "fields"),
       body: str(args, "body")
     });
-    if (!result.created) throw new ToolError(result.reason);
     return result;
   }
 };
+var APPLICABLE_ARGS = {
+  project: ["name"],
+  person: ["name"],
+  meeting: ["name", "project", "date"],
+  doc: ["name", "project"],
+  daily: ["date"],
+  synthesis: ["date"],
+  knowledge: ["name", "topic"],
+  moc: ["topic"],
+  shopping: ["name"],
+  idea: ["name"],
+  index: ["name"]
+};
+var ARG_HINT = {
+  name: 'a moc is titled after its topic (e.g. "Cycling MOC"), and daily and synthesis notes are titled by date. Use type="knowledge" if you meant a note with its own name',
+  project: "only meeting and doc notes live inside a project folder",
+  date: "only daily, synthesis, and meeting notes are placed by date",
+  topic: "only knowledge and moc notes live under a Knowledge Base topic"
+};
+function assertApplicableArgs(type, args) {
+  const accepted = APPLICABLE_ARGS[type];
+  for (const key of ["name", "project", "date", "topic"]) {
+    if (accepted.includes(key)) continue;
+    if (str(args, key) === void 0) continue;
+    throw new ToolError(
+      `note_create type="${type}" does not use ${key} \u2014 ${ARG_HINT[key]}. Remove ${key} and call again.`
+    );
+  }
+}
 function flatMap(args, key) {
   const value = args[key];
   if (value === void 0 || value === null) return void 0;
@@ -17553,13 +17877,19 @@ function flatMap(args, key) {
     if (typeof v === "object") {
       throw new ToolError(`${key}.${k} must be a string; nested objects and arrays are not supported.`);
     }
-    out[k] = String(v);
+    const value2 = String(v);
+    if (/[\r\n]/.test(value2)) {
+      throw new ToolError(
+        `${key}.${k} must be a single line \u2014 a line break would end the frontmatter block early. Put multi-line prose in body instead.`
+      );
+    }
+    out[k] = value2;
   }
   return out;
 }
 var dailyLog = {
   name: "daily_log",
-  description: "Add an entry to the personal daily journal, creating Daily/DATE.md from the template if it does not exist. The daily note is a diary \u2014 mood, weather, exercise, media, food, purchases, stray thoughts. Project facts, decisions, meeting notes, and follow-ups do not belong here: route those to section_append on the project note and to task_add. Feelings about a project are journal; the facts about it are not.",
+  description: "Add an entry to the personal daily journal, creating Daily/DATE.md from the template if it does not exist. Repeats of the same text in the same section are skipped unless dedupe=false. The daily note is a diary \u2014 mood, weather, exercise, media, food, purchases, stray thoughts. Project facts, decisions, meeting notes, and follow-ups do not belong here: route those to section_append on the project note and to task_add. Feelings about a project are journal; the facts about it are not.",
   inputSchema: {
     type: "object",
     properties: {
@@ -17572,7 +17902,11 @@ var dailyLog = {
         type: "string",
         description: "The entry, in the user's own wording. One line or a short block."
       },
-      date: { type: "string", description: "YYYY-MM-DD. Defaults to today in the vault's timezone." }
+      date: { type: "string", description: "YYYY-MM-DD. Defaults to today in the vault's timezone." },
+      dedupe: {
+        type: "boolean",
+        description: "Skip the entry if the same text is already in that section today. Default true. Set false to log something that genuinely happened twice."
+      }
     },
     required: ["section", "content"],
     additionalProperties: false
@@ -17580,6 +17914,7 @@ var dailyLog = {
   handler: (args) => {
     const section = enumArg(args, "section", DAILY_SECTIONS, true);
     const content = req(args, "content");
+    const dedupe = bool(args, "dedupe") ?? true;
     const date3 = str(args, "date") ? assertDate(req(args, "date"), "date") : today();
     const daily = ensureDailyNote(date3);
     const note = resolveNote(daily.path);
@@ -17590,7 +17925,7 @@ var dailyLog = {
       working = insertSection(working, section, [...DAILY_SECTIONS]);
       created = true;
     }
-    const result = appendToSection(working, section, content, { notePath: note.path });
+    const result = appendToSection(working, section, content, { dedupe, notePath: note.path });
     if (!result.changed && !created) {
       return { path: note.path, section, appended: false, reason: result.reason };
     }
@@ -17627,7 +17962,7 @@ var checklistSet = {
     additionalProperties: false
   },
   handler: (args) => {
-    const note = resolveNote(req(args, "note"));
+    const note = resolveWritable(req(args, "note"));
     const current = readNote(note);
     const result = setChecklistItem(current.content, {
       item: req(args, "item"),
@@ -17644,7 +17979,7 @@ var checklistSet = {
 };
 var relate = {
   name: "relate",
-  description: "Record that two notes are connected, as a line in the target note's `## Related` section. One connection per call. The reason is yours to write and is the point of the tool \u2014 a bare link with no reason is noise. Already-linked targets are skipped, so re-running is safe. Capped at " + RELATE_CAP + " new links per note per day.",
+  description: "Record that two notes are connected, as a line in the target note's `## Related` section. One connection per call. The reason is yours to write and is the point of the tool \u2014 a bare link with no reason is noise. Already-linked targets are skipped, so re-running is safe. Capped at " + RELATE_CAP + " new links per note per day; a mirrored link counts against the target's cap too, and is skipped once the target is full.",
   inputSchema: {
     type: "object",
     properties: {
@@ -17663,10 +17998,11 @@ var relate = {
     additionalProperties: false
   },
   handler: (args) => {
-    const note = resolveNote(req(args, "note"));
+    const note = resolveWritable(req(args, "note"));
     const target = resolveNote(req(args, "target"));
     const reason = req(args, "reason").trim();
     const mirror = bool(args, "mirror") ?? false;
+    if (mirror) resolveWritable(target.path);
     if (note.path === target.path) {
       throw new ToolError(`"${note.title}" cannot be related to itself.`);
     }
@@ -17675,7 +18011,7 @@ var relate = {
         `reason is too short to be useful ("${reason}"). Say in one line what connects ${note.title} and ${target.title}.`
       );
     }
-    const added = addRelated(note, target.title, reason);
+    const added = addRelated(note, target, reason);
     const result = {
       note: note.path,
       target: target.title,
@@ -17684,21 +18020,32 @@ var relate = {
       ...added.reason ? { reason_skipped: added.reason } : {}
     };
     if (mirror) {
-      const back = addRelated(target, note.title, reason, { charge: false });
-      result.mirrored = back.added;
-      if (back.reason) result.mirror_skipped = back.reason;
+      if (relateBudgetRemaining(target.path) <= 0) {
+        result.mirrored = false;
+        result.mirror_skipped = `"${target.path}" has already taken its ${RELATE_CAP} related links today`;
+      } else {
+        const back = addRelated(target, note, reason);
+        result.mirrored = back.added;
+        if (back.reason) result.mirror_skipped = back.reason;
+      }
     }
     return result;
   }
 };
-function addRelated(note, target, reason, options = {}) {
-  const charge = options.charge ?? true;
+function addRelated(note, target, reason) {
   const current = readNote(note);
-  const existing = relatedTargets(current.content).map((t) => t.toLowerCase());
-  if (existing.includes(target.toLowerCase())) {
-    return { added: false, reason: `[[${target}]] is already listed under ## ${RELATED_SECTION}` };
+  const existing = /* @__PURE__ */ new Set();
+  for (const ref of relatedTargets(current.content)) {
+    const found = findNoteSafe(ref);
+    existing.add((found ? found.path : ref).toLowerCase());
   }
-  if (charge && relateBudgetRemaining(note.path) <= 0) {
+  if (existing.has(target.path.toLowerCase()) || existing.has(target.title.toLowerCase())) {
+    return {
+      added: false,
+      reason: `[[${target.title}]] is already listed under ## ${RELATED_SECTION}`
+    };
+  }
+  if (relateBudgetRemaining(note.path) <= 0) {
     throw new ToolError(
       `"${note.path}" has already taken its ${RELATE_CAP} new related links today. Stop adding links to this note; keep the strongest remaining connection for tomorrow.`
     );
@@ -17707,11 +18054,14 @@ function addRelated(note, target, reason, options = {}) {
   if (!findSection(working, RELATED_SECTION)) {
     working = insertSection(working, RELATED_SECTION, templateOrder(note));
   }
-  const result = appendToSection(working, RELATED_SECTION, relatedLine(target, reason), {
-    notePath: note.path
-  });
+  const result = appendToSection(
+    working,
+    RELATED_SECTION,
+    relatedLine(wikilinkTarget(target), reason),
+    { notePath: note.path }
+  );
   writeNoteGuarded(note.path, current.mtimeMs, result.content);
-  if (charge) spendRelateBudget(note.path);
+  spendRelateBudget(note.path);
   return { added: true };
 }
 var inboxRoute = {
@@ -17743,8 +18093,8 @@ var inboxRoute = {
   },
   handler: (args) => {
     const fragment = req(args, "line").trim();
-    const source = resolveNote(str(args, "source_note") ?? "Inbox.md");
-    const destination = resolveNote(req(args, "destination_note"));
+    const source = resolveWritable(str(args, "source_note") ?? "Inbox.md");
+    const destination = resolveWritable(req(args, "destination_note"));
     if (source.path === destination.path) {
       throw new ToolError(`source and destination are the same note (${source.path}).`);
     }
@@ -17766,9 +18116,9 @@ var inboxRoute = {
     const payload = str(args, "content") ?? stripListMarker(match.text);
     const sectionName = str(args, "destination_section");
     const destRead = readNote(destination);
-    let written;
+    let written2;
     if (sectionName) {
-      written = appendToSection(destRead.content, sectionName, payload, {
+      written2 = appendToSection(destRead.content, sectionName, payload, {
         notePath: destination.path
       }).content;
     } else {
@@ -17778,11 +18128,11 @@ var inboxRoute = {
           `${destination.path} has sections, so destination_section is required; sections present: ${sections.map((s) => s.name).join(", ")}.`
         );
       }
-      written = `${destRead.content.replace(/\s*$/, "")}
+      written2 = `${destRead.content.replace(/\s*$/, "")}
 ${payload}
 `;
     }
-    writeNoteGuarded(destination.path, destRead.mtimeMs, written);
+    writeNoteGuarded(destination.path, destRead.mtimeMs, written2);
     const verify = readNote(destination.path);
     if (!verify.content.includes(payload.trim())) {
       throw new ToolError(
@@ -17826,7 +18176,7 @@ var linkify = {
         type: "boolean",
         description: "true reports the links it would add and writes nothing. Default false."
       },
-      limit: { type: "number", description: "Maximum changes to list in the report. Default 100." }
+      limit: { type: "number", minimum: 1, description: "Maximum changes to list in the report. Default 100." }
     },
     additionalProperties: false
   },
@@ -17834,7 +18184,7 @@ var linkify = {
     const ref = str(args, "note");
     const since = str(args, "since");
     const dryRun = bool(args, "dry_run") ?? false;
-    const limit = num(args, "limit") ?? 100;
+    const limit = limitArg(args, 100);
     let targets = ref ? [resolveNote(ref)] : getIndex().notes;
     if (!ref && since) {
       assertDate(since, "since");
@@ -17844,17 +18194,167 @@ var linkify = {
     const entities = buildEntities();
     const plan = planLinkify(targets, entities);
     const changes = plan.notes.flatMap((n) => n.changes);
+    const written2 = [];
+    const failed = [];
     if (!dryRun) {
-      for (const note of plan.notes) writeNoteGuarded(note.path, note.mtimeMs, note.content);
+      for (const note of plan.notes) {
+        try {
+          writeNoteGuarded(note.path, note.mtimeMs, note.content);
+          written2.push(note.path);
+        } catch (error2) {
+          failed.push({ note: note.path, error: error2.message });
+        }
+      }
     }
+    const applied = dryRun ? [] : changes.filter((c) => written2.includes(c.note));
     return {
       dry_run: dryRun,
       notes_scanned: plan.scanned,
       entities_considered: plan.entities,
-      notes_changed: plan.notes.length,
-      links_added: dryRun ? 0 : changes.length,
+      notes_changed: dryRun ? plan.notes.length : written2.length,
+      links_added: applied.length,
+      ...failed.length ? {
+        notes_failed: failed,
+        note: `${failed.length} note(s) could not be written and were left unchanged; the rest were applied. linkify is idempotent \u2014 call it again to retry.`
+      } : {},
       ...truncation(changes.length, Math.min(changes.length, limit), "proposed links"),
       changes: changes.slice(0, limit)
+    };
+  }
+};
+var noteSetField = {
+  name: "note_set_field",
+  description: "Change one frontmatter field on an existing note \u2014 a project's status, a person's role, a note's topics. Which value is right is your call; the server writes the YAML correctly, quoting wikilink lists so Obsidian still counts them as graph edges. Pass an empty value to remove the field. Only these fields can be set: " + SETTABLE_FIELDS.join(", ") + ". type, created, date, project, and topic decide where the note lives and cannot be changed this way.",
+  inputSchema: {
+    type: "object",
+    properties: {
+      note: { type: "string", description: "Note name or vault-relative path." },
+      field: {
+        type: "string",
+        enum: [...SETTABLE_FIELDS],
+        description: "Frontmatter key to set."
+      },
+      value: {
+        type: "string",
+        description: "New value. For people and projects, a comma-separated list of note names \u2014 they become quoted wikilinks. For topics, aliases, and tags, a comma-separated plain list. Empty string removes the field."
+      }
+    },
+    required: ["note", "field", "value"],
+    additionalProperties: false
+  },
+  handler: (args) => {
+    const note = resolveWritable(req(args, "note"));
+    const field = enumArg(args, "field", SETTABLE_FIELDS, true);
+    const raw = str(args, "value");
+    const current = readNote(note);
+    const edit = setFrontmatterField(current.content, field, raw ?? null);
+    if (!edit.changed) {
+      return { path: note.path, field, changed: false, reason: "already set to that value" };
+    }
+    writeNoteGuarded(note.path, current.mtimeMs, edit.content);
+    return {
+      path: note.path,
+      field,
+      changed: true,
+      before: edit.before ?? null,
+      cleared: raw === void 0
+    };
+  }
+};
+var STANDUP_FILE = "Standup.md";
+var standupWrite = {
+  name: "standup_write",
+  description: "Replace the body of Standup.md with today's standup. This is the one note in the vault that is regenerated rather than appended to \u2014 it is derived from the projects, tasks, and people notes, so yesterday's copy is not history worth keeping. Frontmatter is preserved. Nothing else in the vault can be replaced this way.",
+  inputSchema: {
+    type: "object",
+    properties: {
+      content: {
+        type: "string",
+        description: "The standup body in markdown, below the title. Sections and wording are yours to decide."
+      },
+      date: { type: "string", description: "YYYY-MM-DD. Defaults to today in the vault's timezone." }
+    },
+    required: ["content"],
+    additionalProperties: false
+  },
+  handler: (args) => {
+    const body = req(args, "content").trim();
+    const date3 = str(args, "date") ? assertDate(req(args, "date"), "date") : today();
+    const note = resolveNote(STANDUP_FILE);
+    const current = readNote(note);
+    const parsed = parseNote(current.content);
+    const frontmatter = parsed.raw ? `---
+${parsed.raw}
+---
+
+` : "";
+    const next = `${frontmatter}# Standup \u2014 ${date3}
+
+${body}
+`;
+    if (next === current.content) {
+      return { path: note.path, date: date3, replaced: false, reason: "already identical" };
+    }
+    writeNoteGuarded(note.path, current.mtimeMs, next);
+    return { path: note.path, date: date3, replaced: true, bytes: next.length };
+  }
+};
+var inboxClear = {
+  name: "inbox_clear",
+  description: "Remove one line from an inbox note after it has already been captured elsewhere. captured_as must name the note the item now lives in, and that note must exist \u2014 this is the only tool that removes a line, and it will not do so on your say-so alone. Use inbox_route when the item still needs writing somewhere; use this only when task_add or note_create has already taken it.",
+  inputSchema: {
+    type: "object",
+    properties: {
+      line: {
+        type: "string",
+        description: "Distinctive fragment of the inbox line to remove. Must match exactly one line."
+      },
+      captured_as: {
+        type: "string",
+        description: 'The existing note this item was captured into, e.g. "Tasks" after task_add, or the knowledge note you just created.'
+      },
+      source_note: {
+        type: "string",
+        description: 'Inbox to clear from. Defaults to "Inbox". Use "Knowledge Base/Inbox.md" for the KB inbox.'
+      }
+    },
+    required: ["line", "captured_as"],
+    additionalProperties: false
+  },
+  handler: (args) => {
+    const fragment = req(args, "line").trim();
+    const source = resolveNote(str(args, "source_note") ?? "Inbox.md");
+    if (source.title.toLowerCase() !== "inbox") {
+      throw new ToolError(
+        `inbox_clear only clears inbox notes; "${source.path}" is not one. Nothing else in the vault removes lines.`
+      );
+    }
+    const captured = resolveNote(req(args, "captured_as"));
+    if (captured.path === source.path) {
+      throw new ToolError(`captured_as must be the note the item moved to, not ${source.path} itself.`);
+    }
+    const current = readNote(source);
+    const lines = current.content.split("\n");
+    const needle = fragment.toLowerCase();
+    const matches = lines.map((text, index2) => ({ text, index: index2 })).filter((l) => l.text.trim() !== "" && !l.text.trimStart().startsWith("#")).filter((l) => l.text.toLowerCase().includes(needle));
+    if (matches.length === 0) {
+      throw new ToolError(
+        `no line in ${source.path} contains "${fragment}". Read the note first to get the exact wording.`
+      );
+    }
+    if (matches.length > 1) {
+      throw new ToolError(
+        `"${fragment}" matches ${matches.length} lines in ${source.path}: ${matches.map((m) => `"${m.text.trim()}"`).join("; ")}. Pass a longer fragment.`
+      );
+    }
+    const match = matches[0];
+    lines.splice(match.index, 1);
+    writeNoteGuarded(source.path, current.mtimeMs, lines.join("\n"));
+    return {
+      cleared: true,
+      from: source.path,
+      captured_as: captured.path,
+      removed_line: match.text.trim()
     };
   }
 };
@@ -17873,6 +18373,9 @@ var TOOLS = [
   relate,
   inboxRoute,
   linkify,
+  noteSetField,
+  standupWrite,
+  inboxClear,
   vaultSnapshot
 ];
 var TOOLS_BY_NAME = new Map(TOOLS.map((t) => [t.name, t]));

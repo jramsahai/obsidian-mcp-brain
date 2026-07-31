@@ -18,7 +18,7 @@ Use this skill as the shared Obsidian/vault coordination layer. Keep workflow-sp
 - Local timezone: `America/New_York`
 - The vault is a git repository (branch `main`). Git is the recovery mechanism for machine edits; automated passes snapshot before and after with `obsidian__vault_snapshot`.
 
-All vault work goes through the `obsidian__*` tools. They talk to the vault filesystem directly — the Obsidian app does not need to be running, and no shell command is involved. Do not shell out to `obsidian-cli`, `git`, `cat`, or `ls` for vault work; those paths are gone.
+All vault work goes through the `obsidian__*` tools. They talk to the vault filesystem directly — the Obsidian app does not need to be running, and no shell command is involved. Never shell out for vault work: not to a command-line vault client, not to `git`, `cat`, or `ls`. Those paths are gone, and the tools cover what they did.
 
 ## Tools
 
@@ -39,7 +39,10 @@ Call `obsidian__vault_status` first in any scheduled or exploratory run. It answ
 | Add, merge, or check off a checkbox item | `obsidian__checklist_set` |
 | Record that two notes are connected | `obsidian__relate` |
 | Move an item out of an inbox | `obsidian__inbox_route` |
+| Drop an inbox line already captured elsewhere | `obsidian__inbox_clear` |
+| Change one frontmatter field | `obsidian__note_set_field` |
 | Turn plain-text mentions into wikilinks | `obsidian__linkify` |
+| Regenerate `Standup.md` | `obsidian__standup_write` |
 | Commit the vault | `obsidian__vault_snapshot` |
 
 Two rules matter more than the rest:
@@ -92,11 +95,14 @@ Every note gets YAML frontmatter — it is the queryable data model for Obsidian
 
 You do not write it. `obsidian__note_create` emits the correct keys for the type you ask for, quotes wikilinks in properties, and stamps `created`. The `type` enum in its schema is the list of note kinds; its `fields` argument takes anything extra (`{"status":"On Hold","people":"Jane Doe"}`).
 
+To change a property on a note that already exists, use `obsidian__note_set_field` — it edits that one line and leaves every other byte of the block alone. Which value is right is your judgment; the YAML is not, so do not hand-write it. Keys that decide where a note lives (`type`, `created`, `date`, `project`, `topic`) cannot be changed this way; the field enum lists what can.
+
 Existing notes that predate this and lack frontmatter are left as they are. `obsidian__section_append` never touches frontmatter.
 
 ## Writing Into Notes
 
-- **A new note of any kind** -> `obsidian__note_create`. It derives the path from type and name, so `[[Wikilinks]]` to it resolve. It refuses to overwrite a note that already has content, and refuses generic names like `Overview`.
+- **A new note of any kind** -> `obsidian__note_create`. It derives the path from type and name, so `[[Wikilinks]]` to it resolve. It never overwrites a note that already has content — the call succeeds with `created: false` and a reason, so branch on that and append instead. It refuses generic names like `Overview`, and names containing `#`, `|`, `[`, or `]`, which would break the wikilink to the note.
+- Template notes (frontmatter `template: true`) are not writable by any tool. A write to one is refused, because every note later created from it would inherit the contamination.
 - **Content under an existing heading** -> `obsidian__section_append`. It appends at the end of the *named section*, so content cannot land after the wrong heading or at the bottom of the file. When the section holds a table it appends a table row; pass the content pipe-delimited (`| 2026-07-31 | Topic | Summary |`) and it names the columns if you get it wrong.
 - **A journal entry** -> `obsidian__daily_log`. **A checkbox item** -> `obsidian__checklist_set`. **A task** -> `obsidian__task_add`.
 
@@ -129,11 +135,12 @@ What automated passes (nightly consolidation, entity linking) may do to existing
 - Everything else is append-only: `## Related` sections, MOC updates, synthesis notes, review-log entries. *Enforced by `obsidian__section_append` and `obsidian__relate`, which only ever append.*
 - Idempotent re-runs: re-running a pass over the same notes must change nothing. *Enforced by every write tool skipping content already present — `obsidian__section_append` dedupes, `obsidian__task_add` rejects near-duplicates, `obsidian__relate` skips linked targets, `obsidian__checklist_set` merges into the existing line, `obsidian__linkify` sees its own brackets.*
 - Never rewrite, reorder, or summarize user prose, especially in `Daily/` notes.
-- Never delete. Merging means all content lands in the destination. *Enforced by the tool surface: nothing exposed deletes a note.*
-- Inbox routing is the one sanctioned move. *Enforced by `obsidian__inbox_route`, which writes the destination, verifies it, and only then removes the source line — so the item cannot end up nowhere.*
-- Connections between notes are the model's judgment, not the server's. `obsidian__relate` fixes the shape of a connection and caps how many one note takes in a night; deciding *which* notes are related, and writing the reason, is yours.
-- Trimming `## Review Log` entries beyond the ~20 newest is sanctioned bookkeeping, not content deletion.
-- Snapshot before and after any automated pass with `obsidian__vault_snapshot`. One reviewable commit per pass is the recovery story.
+- Never delete. Merging means all content lands in the destination. *Enforced by the tool surface: nothing exposed deletes a note, and only two tools remove a line at all — both bounded to inboxes, and both requiring the content to exist elsewhere first.*
+- Inbox routing is the one sanctioned move. *Enforced by `obsidian__inbox_route`, which writes the destination, verifies it, and only then removes the source line — so the item cannot end up nowhere. `obsidian__inbox_clear` covers the other half: an item already captured by `obsidian__task_add` or `obsidian__note_create` is cleared by naming the note that took it.*
+- Connections between notes are the model's judgment, not the server's. `obsidian__relate` fixes the shape of a connection and caps how many one note takes in a night — inbound mirrored links included; deciding *which* notes are related, and writing the reason, is yours.
+- A bounded log stays bounded in the same write: `obsidian__section_append` with `keep_newest=20` caps a `## Review Log` as it appends. This is the only sanctioned trimming, and it is not content deletion.
+- `Standup.md` is the one generated note, replaced whole each morning by `obsidian__standup_write`. No other note can be replaced, and the native write tools remain off-limits everywhere including here.
+- Snapshot around any automated pass with `obsidian__vault_snapshot`: `scope="all"` first to park the user's own uncommitted edits, then the default `scope="machine"` after, which commits only what the pass wrote. One reviewable commit per pass is the recovery story, and scoping is what keeps reverting it from discarding the user's work.
 
 ## Routing
 

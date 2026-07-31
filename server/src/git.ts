@@ -30,8 +30,29 @@ export function gitAvailable(): boolean {
   }
 }
 
-export function statusPorcelain(): string[] {
-  return git(["status", "--porcelain"]).split("\n").filter(Boolean);
+/**
+ * Why git is unusable, in a sentence the model can act on — or null when it
+ * works. `git_dirty: null` alone read exactly like a healthy clean vault, so a
+ * broken git was invisible until vault_snapshot threw git's own fatal text
+ * hours later, in the middle of an unattended run.
+ */
+export function gitDiagnosis(): string | null {
+  const cfg = config();
+  if (!cfg.gitEnabled) return null;
+  if (gitAvailable()) return null;
+  return `git is enabled (VAULT_GIT=1) but unusable: "${cfg.vaultRoot}" is not a git repository, or the binary at VAULT_GIT_BIN="${cfg.gitBinary}" is missing. Snapshots will fail until this is fixed.`;
+}
+
+/**
+ * `-uall` lists files inside a new directory individually. Without it an entire
+ * untracked folder collapses to one `?? dir/` entry, so a pass that created
+ * three notes in two new folders reported "1 file changed" — the number that is
+ * supposed to make the pass reviewable was wrong precisely when it did most.
+ */
+export function statusPorcelain(paths: string[] = []): string[] {
+  const args = ["status", "--porcelain", "-uall"];
+  if (paths.length) args.push("--", ...paths);
+  return git(args).split("\n").filter(Boolean);
 }
 
 export function isDirty(): boolean {
@@ -45,16 +66,35 @@ export interface SnapshotResult {
   message: string;
 }
 
-/** `git add -A` + commit. A clean tree is success, not an error. */
-export function snapshot(label: string): SnapshotResult {
-  if (!config().gitEnabled) {
+/**
+ * Stage and commit. A clean tree is success, not an error.
+ *
+ * `paths` scopes the commit to what this server actually wrote. Staging the
+ * whole worktree swept in whatever the user had uncommitted in Obsidian —
+ * including deletions — so reverting a bad machine pass also discarded the
+ * user's own work, and "one reviewable commit per pass" was not true.
+ */
+export function snapshot(label: string, paths?: string[]): SnapshotResult {
+  const cfg = config();
+  if (!cfg.gitEnabled) {
     throw new ToolError("git snapshots are disabled; set VAULT_GIT=1 in the server env to enable.");
   }
-  const dirty = statusPorcelain();
+  const broken = gitDiagnosis();
+  if (broken) throw new ToolError(broken);
+
+  const scoped = paths !== undefined;
+  if (scoped && paths!.length === 0) {
+    return {
+      committed: false,
+      files_changed: 0,
+      message: "nothing to commit — this server has written no notes since the last snapshot",
+    };
+  }
+  const dirty = statusPorcelain(scoped ? paths! : []);
   if (dirty.length === 0) {
     return { committed: false, files_changed: 0, message: "nothing to commit — vault already clean" };
   }
-  git(["add", "-A"]);
+  git(scoped ? ["add", "-A", "--", ...paths!] : ["add", "-A"]);
   git(["commit", "-m", label]);
   const sha = git(["rev-parse", "--short", "HEAD"]);
   return {

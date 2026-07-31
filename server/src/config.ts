@@ -60,12 +60,27 @@ export function localTime(cfg: Config = config(), now: Date = new Date()): strin
   }).format(now);
 }
 
-const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
+const DATE_RE = /^(\d{4})-(\d{2})-(\d{2})$/;
 
+/**
+ * Shape *and* calendar. The shape check alone let "2026-02-31" and "2026-99-99"
+ * through into date-named note paths, and nothing in the tool surface can
+ * delete the junk note that results — so the only place to stop it is here.
+ */
 export function assertDate(value: string, field: string): string {
-  if (!DATE_RE.test(value)) {
+  const match = DATE_RE.exec(value);
+  if (!match) {
     throw new ToolError(
       `${field} must be an exact date in YYYY-MM-DD form; got "${value}". Resolve relative dates like "friday" before calling.`,
+    );
+  }
+  const y = Number(match[1]);
+  const m = Number(match[2]);
+  const d = Number(match[3]);
+  const stamp = new Date(Date.UTC(y, m - 1, d));
+  if (stamp.getUTCFullYear() !== y || stamp.getUTCMonth() !== m - 1 || stamp.getUTCDate() !== d) {
+    throw new ToolError(
+      `${field} "${value}" is not a real calendar date. Check the month and day.`,
     );
   }
   return value;

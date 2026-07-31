@@ -20,18 +20,46 @@ export interface ParsedNote {
   bodyStartLine: number;
 }
 
-export function parseNote(content: string): ParsedNote {
-  const lines = content.split("\n");
-  if (lines[0]?.trim() !== "---") {
-    return { raw: "", data: {}, body: content, bodyStartLine: 0 };
-  }
-  let end = -1;
+const KV_LINE_RE = /^([A-Za-z0-9_][A-Za-z0-9_ -]*):\s*(.*)$/;
+
+/**
+ * Index of the closing `---`, or -1 when the note has no frontmatter.
+ *
+ * A leading `---` is not proof on its own: a note may open with a horizontal
+ * rule, and treating the prose between two rules as YAML silently drops it from
+ * every read. The block only counts when its interior actually looks like YAML.
+ * Prose containing a colon is still indistinguishable from a key — that
+ * ambiguity is inherent to the syntax, and erring toward "frontmatter" there
+ * matches what Obsidian itself does.
+ *
+ * Exported so `scan.ts` classifies the same lines the same way; when the two
+ * disagreed, a heading inside the false frontmatter was invisible to section
+ * lookups while still being visible to the body reader.
+ */
+export function frontmatterEndLine(lines: string[]): number {
+  if (lines[0]?.trim() !== "---") return -1;
   for (let i = 1; i < lines.length; i++) {
     if (lines[i].trim() === "---") {
-      end = i;
-      break;
+      return looksLikeFrontmatter(lines.slice(1, i)) ? i : -1;
     }
   }
+  return -1;
+}
+
+function looksLikeFrontmatter(inner: string[]): boolean {
+  for (const line of inner) {
+    if (!line.trim()) continue;
+    if (line.trimStart().startsWith("#")) continue; // YAML comment
+    if (/^\s*-\s+/.test(line)) continue; // block-list item under a key
+    if (!KV_LINE_RE.test(line)) return false;
+  }
+  // An empty block is unambiguous frontmatter, not a pair of rules.
+  return true;
+}
+
+export function parseNote(content: string): ParsedNote {
+  const lines = content.split("\n");
+  const end = frontmatterEndLine(lines);
   if (end === -1) {
     return { raw: "", data: {}, body: content, bodyStartLine: 0 };
   }

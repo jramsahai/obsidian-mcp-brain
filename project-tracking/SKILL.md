@@ -73,14 +73,14 @@ Status values: `Active`, `On Hold`, `Blocked`, `Done`. Status lives in frontmatt
 When creating a project:
 
 1. Normalize the project name to Title Case unless the user gives exact casing.
-2. Create `Projects/[Project Name]/` and `Projects/[Project Name]/[Project Name].md` from the template.
-3. Populate known frontmatter, description, stakeholders, blockers, decisions, and related tasks. Use `[[First Last]]` wikilinks for every person named.
+2. `obsidian__note_create type="project" name="[Project Name]"` — the server creates the folder, the note, the frontmatter, and the standard sections. Pass known values through `fields`, e.g. `fields={"status":"Active","people":"Jane Doe, Sam Lee","description":"One line"}`; `people` becomes quoted wikilinks.
+3. Fill the sections with `obsidian__section_append`. Use `[[First Last]]` wikilinks for every person named.
 4. If the user also gives actionable work, route to `task-tracking` to add tasks to `Tasks.md`.
 
 When updating a project:
 
 1. Read the existing project note.
-2. Update only the relevant section; keep frontmatter `status`/`people`/`topics` in sync with body changes.
+2. Append to the relevant section with `obsidian__section_append`, and keep the `status`, `people`, and `topics` properties in sync with `obsidian__note_set_field note="[Project Name]" field="status" value="On Hold"`. Stale frontmatter is not cosmetic: `standup` lists active projects with `obsidian__vault_list type="project" status="Active"`, so a project left `Active` after it stops is reported as live work every weekday until someone notices.
 3. Add dates using the local timezone.
 4. Preserve existing tables and user wording where possible.
 5. Wikilink people in the `Who` columns of Conversation Log and Waiting On.

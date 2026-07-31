@@ -17,14 +17,24 @@ Use this skill for the user's personal knowledge base: factual, evergreen, or re
 
 - Use `second-brain` for shared vault location, routing, frontmatter, and linking conventions.
 - Use `nightly-consolidation` for the nightly pass; this skill's review workflow below is the KB-specific portion of that pass.
-- Use the Obsidian CLI for search, read, move, backlinks, and properties. Write note bodies (create, multi-line append) via direct file write — CLI `content=` args with multi-line/escaped text force an exec approval (see `second-brain` -> Vault).
+- Every read and write goes through the `obsidian__*` tools; see `second-brain` -> Tools.
 
-## Vault Area
+## Tools
 
-- Vault config (name, path, CLI binary, timezone): see `second-brain` -> Vault. Examples assume vault name `Obsidian Vault`.
-- Root folder: `Knowledge Base/`
-- Inbox note: `Knowledge Base/Inbox.md`
-- Index: `Knowledge Base/README.md`
+The server derives every path from `type` plus `topic`, so never construct one.
+
+| Need | Call |
+|---|---|
+| Create a knowledge note | `obsidian__note_create type="knowledge" name="Chain Wear" topic="Cycling/Repair"` |
+| Create a topic hub | `obsidian__note_create type="moc" topic="Cycling"` |
+| Fill a section | `obsidian__section_append note="Chain Wear" section="Details" content="…"` |
+| Find existing notes on a topic | `obsidian__vault_search query="chain" type="knowledge"` |
+| List a topic folder | `obsidian__vault_list folder="Knowledge Base"` |
+| Record a connection | `obsidian__relate note="Chain Wear" target="Drivetrain Maintenance" reason="…"` |
+| Route an inbox item | `obsidian__inbox_route line="…" destination_note="…" source_note="Knowledge Base/Inbox.md"` |
+| Drop an inbox line already captured | `obsidian__inbox_clear line="…" captured_as="Chain Wear" source_note="Knowledge Base/Inbox.md"` |
+
+Vault area: root folder `Knowledge Base/`, inbox note `Knowledge Base/Inbox.md`, index `Knowledge Base/README.md`.
 
 ## What Belongs Here
 
@@ -48,9 +58,13 @@ If a capture crosses boundaries, write the evergreen reference here and cross-li
 When the user asks to remember, record, save, or note arbitrary factual/reference material:
 
 1. Decide whether it clearly belongs in the knowledge base.
-2. Search the existing `Knowledge Base/` area for a matching topic before creating a new note.
-3. If there is an obvious existing note, append the new item there.
-4. If there is an obvious topic but no note, create a short topic note in a reasonable folder.
+2. Search first: `obsidian__vault_search query="…" type="knowledge"`. Do not create a second note on a topic that already has one.
+3. If an obvious note exists, add to it with `obsidian__section_append`.
+4. If the topic is obvious but the note does not exist, create it — passing a source URL through `fields` — then fill `## Summary`, `## Details`, and `## Sources` with `obsidian__section_append`:
+
+   ```
+   obsidian__note_create type="knowledge" name="Chain Wear" topic="Cycling/Repair" fields={"source":"https://example.com"}
+   ```
 5. If the topic is unclear, append to `Knowledge Base/Inbox.md` for nightly organization.
 6. Preserve source links exactly when provided.
 7. Do not invent facts not supplied by the user or present in the captured source context.
@@ -61,35 +75,7 @@ For quick raw capture, prefer a compact format:
 - YYYY-MM-DD: [Title or description](URL) — why it may be useful, if known.
 ```
 
-For a more substantial note, use:
-
-```markdown
----
-type: knowledge
-topic: Topic/Subtopic
-topics: [topic, subtopic]
-source: URL if applicable
-created: YYYY-MM-DD
----
-
-# Clear Note Title
-
-## Summary
-
-Brief factual summary.
-
-## Details
-
-Useful notes, instructions, or facts.
-
-## Sources
-
-- URL or citation
-
-## Related
-
-- [[Other Note]] — why it is related
-```
+A substantial note gets the standard shape — `## Summary`, `## Details`, `## Sources`, `## Related` — which `obsidian__note_create type="knowledge"` lays out along with the frontmatter. You do not write frontmatter; pass extra values through `fields`.
 
 Wikilink mentions of known projects, people, and other knowledge notes inside the body. Cross-links are what make the knowledge base explorable.
 
@@ -127,7 +113,7 @@ Guidelines:
 
 A MOC is a hub note that links every note on a topic, making the topic navigable from one place (and giving the graph a hub node). Managed primarily by `nightly-consolidation`:
 
-- When a topic folder accumulates roughly 5+ notes, create `[Topic] MOC.md` in that folder with frontmatter `type: moc`, `topic: [Topic]`.
+- When a topic folder accumulates roughly 5+ notes, `obsidian__note_create type="moc" topic="Cycling"` — the note is titled `Cycling MOC` and placed in that folder. It takes no `name`.
 - Body: short description of the topic, then a linked list of the topic's notes grouped however makes sense, each with a few words of context.
 - Keep MOCs updated when notes are added, moved, or merged.
 - Link the MOC from `Knowledge Base/README.md`.
@@ -139,11 +125,17 @@ Invoked as part of `nightly-consolidation`:
 1. Read `Knowledge Base/Inbox.md` if it exists.
 2. Search/list existing notes under `Knowledge Base/`.
 3. Group inbox items and loose notes into coherent topics.
-4. Move or merge items into the most logical existing topic folder/file — write to the destination first, then remove the routed line from the inbox (see `second-brain` Edit Policy).
-5. Create new folders only when a topic has enough weight or a clearly stable category.
-6. Add `## Related` links and update MOCs where useful.
+4. Move each item with `obsidian__inbox_route`, which writes the destination, verifies it landed, and only then removes the inbox line — so an item can never end up nowhere. When the item is better captured by creating a note or a task, do that first and then clear the line with `obsidian__inbox_clear line="chain wear" captured_as="Chain Wear" source_note="Knowledge Base/Inbox.md"`.
+5. Create new folders only when a topic has enough weight or is a clearly stable category.
+6. Add connections with `obsidian__relate` and update MOCs where useful.
 7. Leave uncertain items in `Knowledge Base/Inbox.md` with a short `Needs routing:` note.
-8. Append a short dated review entry to the `## Review Log` in `Knowledge Base/README.md` — this is the only place the KB review log lives; never write review logs into project, people, or daily notes. Keep only the ~20 newest entries; trimming older ones is sanctioned bookkeeping (see `second-brain` Edit Policy).
+8. Append a dated review entry to the `## Review Log` in the KB index:
+
+   ```
+   obsidian__section_append note="Knowledge Base/README.md" section="Review Log" content="- 2026-07-31: routed 3 inbox items, added Cycling MOC" keep_newest=20
+   ```
+
+   `keep_newest` caps the log at its 20 newest entries in the same write, so it never needs trimming by hand. If the index does not exist yet, create it with `obsidian__note_create type="index" name="Knowledge Base"`. This is the only place the KB review log lives; never write review logs into project, people, or daily notes.
 9. If nothing changed, skip the log entry entirely; do not accumulate "nothing happened" entries.
 
 Do not spend the nightly review polishing prose for its own sake. The goal is findability and sensible structure.

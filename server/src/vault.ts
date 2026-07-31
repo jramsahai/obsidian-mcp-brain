@@ -43,8 +43,39 @@ interface Index {
 let index: Index | null = null;
 const CACHE_MS = 3000;
 
+/**
+ * Lookup key for a title or path. macOS filesystems are normalization-
+ * insensitive but `readdirSync` returns whatever byte form is on disk, so a
+ * note stored NFD (a Finder rename, an unzip, an iCloud sync) was invisible to
+ * the NFC lookup that Obsidian and the model both emit — while `existsSync`
+ * still found it, so note_create refused to create it either. The raw on-disk
+ * path is kept on the Note for filesystem calls; only the key is normalized.
+ */
+function lookupKey(value: string): string {
+  return value.normalize("NFC").toLowerCase();
+}
+
 export function invalidateIndex(): void {
   index = null;
+}
+
+/**
+ * Vault-relative paths this server has written since the last snapshot. A
+ * scoped `git add` needs to know what the machine touched, so that a commit
+ * labelled as the machine's pass contains only the machine's changes.
+ */
+const written = new Set<string>();
+
+export function recordWrite(relPath: string): void {
+  written.add(relPath);
+}
+
+export function writtenPaths(): string[] {
+  return [...written];
+}
+
+export function clearWrittenPaths(): void {
+  written.clear();
 }
 
 export function getIndex(): Index {
@@ -62,9 +93,9 @@ function buildIndex(): Index {
   const byPath = new Map<string, Note>();
   const byTitle = new Map<string, Note[]>();
   for (const note of notes) {
-    byPath.set(note.path.toLowerCase(), note);
+    byPath.set(lookupKey(note.path), note);
     for (const key of [note.title, ...note.aliases]) {
-      const k = key.toLowerCase();
+      const k = lookupKey(key);
       const list = byTitle.get(k);
       if (list) list.push(note);
       else byTitle.set(k, [note]);
@@ -129,11 +160,11 @@ export function resolveNote(ref: string): Note {
 
 /** Titles closest to a miss — substring hits first, then near-misspellings. */
 export function nearestTitles(ref: string, limit = 5): string[] {
-  const needle = stripWikilink(ref).replace(/\.md$/i, "").toLowerCase();
+  const needle = lookupKey(stripWikilink(ref).replace(/\.md$/i, ""));
   if (!needle) return [];
   const scored: { title: string; score: number }[] = [];
   for (const note of getIndex().notes) {
-    const title = note.title.toLowerCase();
+    const title = lookupKey(note.title);
     if (title.includes(needle) || needle.includes(title)) {
       scored.push({ title: note.title, score: 0 });
       continue;
@@ -173,10 +204,10 @@ export function findNote(ref: string): Note | null {
   const idx = getIndex();
 
   const asPath = cleaned.endsWith(".md") ? cleaned : `${cleaned}.md`;
-  const byPath = idx.byPath.get(asPath.toLowerCase());
+  const byPath = idx.byPath.get(lookupKey(asPath));
   if (byPath) return byPath;
 
-  const titleKey = cleaned.replace(/\.md$/i, "").toLowerCase();
+  const titleKey = lookupKey(cleaned.replace(/\.md$/i, ""));
   const byTitle = idx.byTitle.get(titleKey);
   if (byTitle && byTitle.length === 1) return byTitle[0];
   if (byTitle && byTitle.length > 1) {
@@ -226,6 +257,23 @@ export function isTemplate(note: Note): boolean {
   return note.frontmatter?.template === true;
 }
 
+/** How many notes answer to this title or alias. */
+export function titleMatchCount(title: string): number {
+  return getIndex().byTitle.get(lookupKey(title))?.length ?? 0;
+}
+
+/**
+ * The link body to write for a note: the bare title normally, or the
+ * disambiguating `Folder/Name|Title` form when the title is shared. Writing a
+ * bare `[[Overlap]]` when two notes are called Overlap produces a link this
+ * server's own resolver then refuses as ambiguous, and which Obsidian resolves
+ * by proximity — so it can silently point at the wrong note.
+ */
+export function wikilinkTarget(note: Note): string {
+  if (titleMatchCount(note.title) <= 1) return note.title;
+  return `${note.path.replace(/\.md$/i, "")}|${note.title}`;
+}
+
 export function stripWikilink(ref: string): string {
   let value = ref.trim();
   const link = /^\[\[([^\]]+)\]\]$/.exec(value);
@@ -248,8 +296,13 @@ export function absolutePath(note: Note | string): string {
 export function readNote(note: Note | string): { content: string; mtimeMs: number; path: string } {
   const full = absolutePath(note);
   try {
+    // Stat *before* reading. The other order pairs stale content with a fresh
+    // mtime when a write lands between the two calls, so writeNoteGuarded's
+    // comparison passes and the user's edit is silently overwritten. This way
+    // the same race produces a mismatch, which errors and is retryable.
+    const mtimeMs = statSync(full).mtimeMs;
     const content = readFileSync(full, "utf8");
-    return { content, mtimeMs: statSync(full).mtimeMs, path: full };
+    return { content, mtimeMs, path: full };
   } catch {
     throw new ToolError(`could not read "${typeof note === "string" ? note : note.path}".`);
   }
@@ -273,6 +326,7 @@ export function writeNoteGuarded(
     );
   }
   writeFileSync(full, content, "utf8");
+  recordWrite(relPath);
   invalidateIndex();
 }
 

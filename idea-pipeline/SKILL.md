@@ -27,21 +27,26 @@ An idea artifact should support:
 
 Do not force ideas into the same structure as tracked work projects.
 
-## Data Source
+## Tools
 
-- Vault config (name, path, CLI binary, timezone): see `second-brain` -> Vault. Examples assume vault name `Obsidian Vault`.
-- Ideas: `Ideas/[Idea Name].md` — one note per idea. If an idea accumulates research docs, move it to `Ideas/[Idea Name]/[Idea Name].md` with docs alongside.
+One note per idea at `Ideas/[Idea Name].md`; the server derives the path from the name.
 
-## Idea Note Template
+| Need | Call |
+|---|---|
+| Capture an idea | `obsidian__note_create type="idea" name="Overlap"` |
+| Fill a section | `obsidian__section_append note="Overlap" section="Problem" content="…"` |
+| Add a scorecard row | `obsidian__section_append note="Overlap" section="Scorecard" content="\| Pain level \| 4 \| daily friction \|"` |
+| Change status | `obsidian__note_set_field note="Overlap" field="status" value="researching"` |
+| Cross-link | `obsidian__relate note="Overlap" target="Pricing Models" reason="…"` |
+| Compare candidates | `obsidian__vault_list type="idea" status="candidate"` |
+
+`obsidian__note_create type="idea"` lays out every section below and the frontmatter. You do not write frontmatter; `status` afterwards is `obsidian__note_set_field`.
+
+`## Scorecard` is a table, so pass rows pipe-delimited — the tool appends them as rows and names the columns if the shape is wrong.
+
+## Idea Note Shape
 
 ```markdown
----
-type: idea
-status: candidate
-created: YYYY-MM-DD
-topics: []
----
-
 # [Idea Name]
 
 ## Concept
@@ -84,6 +89,8 @@ topics: []
 
 Only fill sections with real content; leave the rest empty. Wikilink related projects, people, and knowledge notes.
 
+If an idea accumulates research docs, it graduates to `Ideas/[Idea Name]/[Idea Name].md` with docs alongside.
+
 ## Screening Questions
 
 Before deeper work, pressure-test each idea with:
@@ -100,7 +107,7 @@ Promote an idea into a tracked project only when:
 - there is a clear enough scope for tasks and progress tracking
 - the next step is no longer just comparison/validation but actual project work
 
-At that point, use `project-tracking` to create `Projects/[Name]/[Name].md`, set the idea's `status: promoted`, and cross-link both notes (`## Related` in each). Move idea-stage research into the project's `Docs/` if it becomes working material.
+At that point, use `project-tracking` to create the project note, set the idea's status with `obsidian__note_set_field note="[Idea Name]" field="status" value="promoted"`, and cross-link both notes with `obsidian__relate note="Overlap" target="Overlap Rollout" reason="this project came out of the idea" mirror=true`. Move idea-stage research into the project's `Docs/` if it becomes working material.
 
 ## Research Hand-off
 

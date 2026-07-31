@@ -6,7 +6,7 @@ A set of agent skills for running a personal "second brain" in an [Obsidian](htt
 
 | Skill | Role |
 |-------|------|
-| `second-brain` | Shared coordination layer: vault config, routing rules, frontmatter standards, linking conventions, CLI guardrails, machine edit policy. Read this first. |
+| `second-brain` | Shared coordination layer: vault config, routing rules, frontmatter standards, linking conventions, the tool surface, machine edit policy. Read this first. |
 | `project-tracking` | Project notes: status, decisions, blockers, docs, task links. |
 | `task-tracking` | Centralized checkbox tasks in `Tasks.md` with due dates, priorities, waiting states, and project wikilinks. |
 | `people-notes` | Durable per-person notes: conversations, pending topics, project associations. |
@@ -20,19 +20,54 @@ A set of agent skills for running a personal "second brain" in an [Obsidian](htt
 
 Design principles baked in: folder notes so `[[wikilinks]]` resolve naturally, frontmatter on every note, append-only machine edits (except adding wikilink brackets), and explicit routing rules so each capture lands in exactly one home.
 
+## The server
+
+The skills do not touch the vault directly. `server/` is an MCP server that exposes a small set of intent-shaped tools (`obsidian__note_create`, `obsidian__section_append`, `obsidian__task_add`, …) over the vault's files.
+
+The split is deliberate, and it is **mechanism vs. judgment, not safety vs. risk**. The server owns the *shape* of a write — where a note goes, what its frontmatter looks like, that a repeat call changes nothing, that nothing is deleted, that a pass lands in one reviewable commit. The model owns the judgment: which notes are worth connecting and why, what a standup should lead with, whether a capture is reference or a task. Conventions the model would otherwise have to remember are enforced in code and in the tool schemas, because prose it can ignore is not a convention.
+
 ## Prerequisites
 
-- **Obsidian** with a vault, and the app running (the CLI talks to the live app).
-- **obsidian-cli** installed at `/usr/local/bin/obsidian` (adjust the path in `second-brain` if yours differs).
-- **macOS** for the `open -g "obsidian://..."` vault-wake recovery flow; on other platforms substitute your OS's URL-opener.
-- **Git in the vault** — `git init` the vault once (ignore `.obsidian/workspace*`, cache, `.trash/`). Nightly consolidation commits a snapshot before and after its edits, so every automated change is reviewable and revertible. Without git, enable Obsidian's File Recovery plugin at minimum.
-- An agent harness that loads these as skills (e.g. OpenClaw, Claude Code). A few guardrails reference OpenClaw's exec-approval behavior (avoid pipes/redirects/globs in fallback shell commands); harmless elsewhere.
+- **Obsidian** with a vault. The app does not need to be running — the server reads and writes the vault's files directly.
+- **Node.js 22+** to build the server.
+- **Git in the vault** — `git init` the vault once (ignore `.obsidian/workspace*`, cache, `.trash/`). Nightly consolidation snapshots around its edits, so every automated change is reviewable and revertible. Without git, enable Obsidian's File Recovery plugin at minimum.
+- An agent harness that loads these as skills and can run an MCP server (e.g. OpenClaw, Claude Code).
 
 ## Setup
 
-1. Edit the **Vault** section of `second-brain/SKILL.md` — vault name, path, CLI binary, timezone. That block is the single source of truth; the other skills reference it.
-2. If your vault is not named `Obsidian Vault`, substitute your name in the `vault=` argument of the CLI examples throughout.
-3. Optional: schedule `nightly-consolidation` (e.g. nightly cron) and `standup` (e.g. weekday mornings) in your harness.
+1. Build the server:
+
+   ```sh
+   cd server && npm install && npm run build
+   ```
+
+   This produces the bundled `server/dist/obsidian-mcp.mjs`, which is committed, so this step is only needed after changing `server/src`.
+
+2. Register it with your harness as an MCP server named `obsidian`, running `node /path/to/server/dist/obsidian-mcp.mjs` with this environment:
+
+   | Variable | Required | Meaning |
+   |---|---|---|
+   | `OBSIDIAN_VAULT` | yes | Absolute path to the vault |
+   | `VAULT_TZ` | no | IANA timezone for "today". Default `America/New_York` |
+   | `VAULT_GIT` | no | `1` enables `obsidian__vault_snapshot` |
+   | `VAULT_GIT_BIN` | no | Path to git. Default `/usr/bin/git` — set this to `/opt/homebrew/bin/git` if that is where yours lives |
+
+   If the harness gates tool access by an allowlist, allow `obsidian__*`, and drop shell/file-write tools for the agent that runs these skills — the tools cover what they did, and leaving them enabled reintroduces the unguarded writes this design exists to prevent.
+
+3. Update the **Vault** block of `second-brain/SKILL.md` with your vault path and timezone. That block is the single source of truth for the skills; the server reads its own config from the environment above.
+
+4. Optional: schedule `nightly-consolidation` (e.g. nightly cron) and `standup` (e.g. weekday mornings) in your harness.
+
+## Development
+
+```sh
+cd server
+npm test          # 198 tests, including a drift lint over every SKILL.md
+npm run check     # tsc --noEmit
+npm run build     # rebuild dist/obsidian-mcp.mjs
+```
+
+The drift lint is the reason the prose and the tools stay in sync: it fails the build when a SKILL.md names a tool, argument, or enum value that does not exist, shows a worked example missing a required argument, or reintroduces an instruction from the pre-server era.
 
 ## Vault layout the skills expect
 

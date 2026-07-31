@@ -24,6 +24,8 @@ export interface Task {
   line: number;
   raw: string;
   section: string;
+  /** Leading whitespace, preserved so a sub-task stays a sub-task. */
+  indent: string;
   done: boolean;
   text: string;
   project?: string;
@@ -39,7 +41,14 @@ const CHECKBOX_RE = /^(\s*)- \[( |x|X)\]\s+(.*)$/;
 const DUE_RE = /📅\s*(\d{4}-\d{2}-\d{2})/;
 const DONE_RE = /✅\s*(\d{4}-\d{2}-\d{2})/;
 const WAITING_RE = /\(waiting on:\s*\[\[([^\]]+)\]\](?:\s*since\s*(\d{4}-\d{2}-\d{2}))?\)/i;
-const LINK_RE = /\[\[([^\]]+)\]\]/;
+/**
+ * The project link is the one in the project *slot* — trailing, after the text
+ * and before the markers. Taking the first wikilink anywhere on the line pulled
+ * `[[Jane Doe]]` out of "Ask [[Jane Doe]] about pricing" and re-emitted it at
+ * the end, destroying the user's sentence and swapping the two links on every
+ * subsequent edit.
+ */
+const TRAILING_LINK_RE = /\s*\[\[([^\][\n]+)\]\]\s*$/;
 const NOTES_RE = /\s+—\s+(.*)$/;
 
 /**
@@ -78,15 +87,17 @@ export function parseTaskLine(raw: string, line: number, section: string): Task 
     }
   }
 
-  const linkMatch = LINK_RE.exec(rest);
+  rest = rest.trimEnd();
+  const linkMatch = TRAILING_LINK_RE.exec(rest);
   const project = linkMatch ? linkMatch[1].split("|")[0].trim() : undefined;
-  if (linkMatch) rest = rest.replace(LINK_RE, " ");
+  if (linkMatch) rest = rest.slice(0, linkMatch.index);
 
   const text = rest.replace(/\s+/g, " ").trim();
   return {
     line,
     raw,
     section,
+    indent: match[1],
     done,
     text,
     project,
@@ -103,8 +114,8 @@ export function parseTaskLine(raw: string, line: number, section: string): Task 
  * Compose a task line in the documented order:
  * `- [ ] text [[Project]] 📅 due <priority> (waiting on: [[Who]] since date) ✅ done — notes`
  */
-export function composeTaskLine(task: Omit<Task, "line" | "raw" | "section">): string {
-  const parts: string[] = [`- [${task.done ? "x" : " "}]`, task.text.trim()];
+export function composeTaskLine(task: Omit<Task, "line" | "raw" | "section" | "indent"> & { indent?: string }): string {
+  const parts: string[] = [`${task.indent ?? ""}- [${task.done ? "x" : " "}]`, task.text.trim()];
   if (task.project) parts.push(`[[${task.project}]]`);
   if (task.due) parts.push(`📅 ${task.due}`);
   if (task.priority && task.priority !== "none") {
@@ -184,8 +195,13 @@ export function findDuplicate(tasks: Task[], text: string): Task | undefined {
   });
 }
 
-/** Insert a task line at the end of a section, keeping section spacing intact. */
-export function insertTaskLine(doc: TasksDoc, sectionName: string, line: string): string[] {
+/** Insert task lines at the end of a section, keeping section spacing intact. */
+export function insertTaskLine(
+  doc: TasksDoc,
+  sectionName: string,
+  line: string | string[],
+): string[] {
+  const payload = Array.isArray(line) ? line : [line];
   const section = requireTaskSection(doc, sectionName);
   const lines = [...doc.lines];
   let insertAt = section.start;
@@ -195,12 +211,30 @@ export function insertTaskLine(doc: TasksDoc, sectionName: string, line: string)
       break;
     }
   }
-  const block = insertAt === section.start && lines[insertAt - 1]?.trim() !== "" ? ["", line] : [line];
+  const block =
+    insertAt === section.start && lines[insertAt - 1]?.trim() !== "" ? ["", ...payload] : payload;
   lines.splice(insertAt, 0, ...block);
   return lines;
 }
 
-/** Remove a task line and re-insert it at the end of the target section. */
+function indentWidth(line: string): number {
+  return (/^[ \t]*/.exec(line)?.[0] ?? "").replace(/\t/g, "    ").length;
+}
+
+/**
+ * Exclusive end of a task's block: the task line plus the run of more-indented
+ * lines beneath it. Moving a single line left a completed parent's sub-items
+ * behind in the old section, re-parented under whatever task happened to
+ * precede them — a silent corruption the result object never mentioned.
+ */
+export function taskBlockEnd(lines: string[], fromLine: number): number {
+  const base = indentWidth(lines[fromLine]);
+  let end = fromLine + 1;
+  while (end < lines.length && lines[end].trim() !== "" && indentWidth(lines[end]) > base) end++;
+  return end;
+}
+
+/** Remove a task and its sub-items, and re-insert them in the target section. */
 export function moveTaskLine(
   lines: string[],
   fromLine: number,
@@ -212,7 +246,9 @@ export function moveTaskLine(
     next[fromLine] = newText;
     return next;
   }
-  next.splice(fromLine, 1);
+  const blockEnd = taskBlockEnd(next, fromLine);
+  const children = next.slice(fromLine + 1, blockEnd);
+  next.splice(fromLine, blockEnd - fromLine);
   const doc = parseTasksDoc(next.join("\n"));
-  return insertTaskLine(doc, toSection, newText);
+  return insertTaskLine(doc, toSection, [newText, ...children]);
 }

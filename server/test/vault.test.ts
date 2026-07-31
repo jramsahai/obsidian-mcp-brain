@@ -42,8 +42,15 @@ describe("vault_read", () => {
 });
 
 describe("vault_list", () => {
-  test("filters by frontmatter type", () => {
+  test("filters by frontmatter type, leaving templates out", () => {
+    // The template carries type: project and status: Active, so including it
+    // would report it as a live project in every standup.
     const result = call("vault_list", { type: "project" });
+    assert.deepEqual(result.notes.map((n: { title: string }) => n.title), ["Example Project"]);
+  });
+
+  test("include_templates opts the template back in", () => {
+    const result = call("vault_list", { type: "project", include_templates: true });
     assert.deepEqual(
       result.notes.map((n: { title: string }) => n.title).sort(),
       ["Example Project", "Project Template"],
@@ -57,7 +64,8 @@ describe("vault_list", () => {
   });
 
   test("filters by status", () => {
-    assert.equal(call("vault_list", { status: "Active" }).total, 2);
+    assert.equal(call("vault_list", { status: "Active" }).total, 1);
+    assert.equal(call("vault_list", { status: "Active", include_templates: true }).total, 2);
   });
 
   test("says so when a cap hides notes", () => {

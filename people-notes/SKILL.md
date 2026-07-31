@@ -12,11 +12,21 @@ description: >
 
 Manage durable person-specific notes in the user's Obsidian second brain. Use `second-brain` for shared vault conventions, `project-tracking` for project state, and `task-tracking` for action items.
 
-## Data Source
+## Tools
 
-- Vault config (name, path, CLI binary, timezone): see `second-brain` -> Vault. Examples assume vault name `Obsidian Vault`.
-- People path: `People/[First Last].md` — spaces, not underscores, so `[[First Last]]` wikilinks resolve naturally.
-- Conversation rows, pending topics, and project links are mid-file section edits: read the note, then edit in place — do not use file-level `append` (see `second-brain` -> Writing Into Notes).
+The server derives the path from the person's name, so never construct one. A person note is `People/[First Last].md` — spaces, not underscores, so `[[First Last]]` resolves.
+
+| Need | Call |
+|---|---|
+| Create a person note | `obsidian__note_create type="person" name="Jane Doe"` |
+| Read one | `obsidian__vault_read note="Jane Doe"` |
+| Log a conversation | `obsidian__section_append note="Jane Doe" section="Conversation History" content="\| 2026-07-31 \| Call \| …  \|"` |
+| Add general context | `obsidian__section_append note="Jane Doe" section="General Notes" content="…"` |
+| Add or check off a pending topic | `obsidian__checklist_set note="Jane Doe" section="Pending Topics" item="…"` |
+| Associate a project | `obsidian__section_append note="Jane Doe" section="Associated Projects" content="- [[Wayfinder]]"` |
+| Update the `projects:` property | `obsidian__note_set_field note="Jane Doe" field="projects" value="Wayfinder"` |
+
+`obsidian__section_append` appends at the end of the *named section*, so a conversation row cannot land under the wrong heading. `## Conversation History` is a table: pass the content as a pipe-delimited row and the tool appends it as a row — if you pass prose, the error names the columns.
 
 ## Person File Template
 
@@ -48,29 +58,28 @@ Relevant strengths, preferences, context, or relationship notes.
 - [[Project Name]]
 ```
 
-`projects:` holds quoted wikilinks: `projects: ["[[Project Name]]"]`. Keep it in sync with `## Associated Projects`.
+`projects:` holds quoted wikilinks: `projects: ["[[Project Name]]"]`. You do not write that syntax — `obsidian__note_set_field note="Jane Doe" field="projects" value="Wayfinder, Atlas"` takes plain names and quotes them, which is what makes Obsidian count them as graph edges. Keep it in sync with `## Associated Projects`.
 
 ## Workflow
 
 When creating a person note:
 
-1. Name the file `People/First Last.md` unless another convention already exists for that person.
-2. Create the file from the template.
-3. Populate only known role, general notes, conversations, pending topics, and associated projects.
-4. Do not infer sensitive personal details.
+1. `obsidian__note_create type="person" name="First Last"`. Pass a known role as `fields={"role":"Client"}`. The sections above are laid out for you.
+2. If the person already has a note, the call returns `created=false` and says so — add to the existing note instead of recreating it.
+3. Populate only what is known. Do not infer sensitive personal details.
 
 When logging a conversation:
 
-1. Determine the person and date in the local timezone.
-2. Add a row to `## Conversation History` with date, context, and concise summary. Wikilink any projects (`[[Project Name]]`) or other people (`[[First Last]]`) mentioned in the summary.
-3. If the conversation belongs to a project, add or preserve the project in `## Associated Projects` and frontmatter `projects:`, and route project-specific content to `project-tracking`.
+1. Determine the person and the date in the local timezone.
+2. Append the row: `obsidian__section_append note="First Last" section="Conversation History" content="| 2026-07-31 | Kickoff call | Agreed to send pricing |"`. Wikilink any projects or other people named in the summary.
+3. If the conversation belongs to a project, add it to `## Associated Projects` and to the `projects:` property, and route project-specific content to `project-tracking`.
 4. If the conversation creates action items, route concrete tasks to `task-tracking`.
 5. If it was just a daily-life note, optionally route a brief note to `daily-journal` when the user's wording suggests journaling.
 
 ## Pending Topics
 
-- Use `## Pending Topics` for things the user wants to discuss with a person later.
-- Check off or remove pending topics only when the user says they were handled.
+- Use `## Pending Topics` for things the user wants to discuss with a person later. Add one with `obsidian__checklist_set note="First Last" section="Pending Topics" item="…"`.
+- Mark a topic handled with the same call plus `checked=true`, and only when the user says it was handled. Nothing removes the line — a checked topic is the record that it happened.
 - If a pending topic is tied to a project, include the `[[Project Name]]` wikilink in the topic text.
 
 ## Relationship to Projects and Tasks

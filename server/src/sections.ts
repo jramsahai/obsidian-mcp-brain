@@ -36,10 +36,23 @@ export function normalizeHeading(name: string): string {
   return name.replace(/^#+\s*/, "").trim();
 }
 
+/**
+ * Find a section by name. Level matters: a `### Notes` nested inside
+ * `## Overview` used to win over the real `## Notes` simply by appearing first,
+ * so an append landed under the wrong heading and still reported success. An
+ * explicit `## Name` in the request picks that level; otherwise the shallowest
+ * match wins, and ties go to document order.
+ */
 export function findSection(content: string, name: string): Section | null {
+  const explicitLevel = /^(#+)\s/.exec(name.trim())?.[1].length;
   const target = normalizeHeading(name).toLowerCase();
-  const sections = listSections(content);
-  return sections.find((s) => s.name.toLowerCase() === target) ?? null;
+  const matches = listSections(content).filter((s) => s.name.toLowerCase() === target);
+  if (matches.length === 0) return null;
+  if (explicitLevel) {
+    const exact = matches.find((s) => s.level === explicitLevel);
+    if (exact) return exact;
+  }
+  return matches.reduce((best, s) => (s.level < best.level ? s : best));
 }
 
 export function requireSection(content: string, name: string, notePath: string): Section {
@@ -88,12 +101,37 @@ export function splitRow(row: string): string[] {
     .map((c) => c.trim());
 }
 
-/** Last non-blank line index within a section, or -1 when the section is empty. */
-function lastContentLine(lines: string[], section: Section): number {
-  for (let i = section.end - 1; i >= section.start; i--) {
+/** Last non-blank line index in `[start, end)`, or -1 when there is none. */
+function lastContentLine(lines: string[], start: number, end: number): number {
+  for (let i = end - 1; i >= start; i--) {
     if (lines[i].trim() !== "") return i;
   }
   return -1;
+}
+
+/**
+ * Where a section's *own* content ends — at its first sub-heading, not at the
+ * end of everything nested beneath it. `## Related` followed by `### See Also`
+ * spans both, so appending at the end of the span put the new link inside the
+ * sub-list rather than in the list the reader actually looks at.
+ */
+function ownContentEnd(content: string, section: Section): number {
+  for (const s of listSections(content)) {
+    if (s.headingLine > section.headingLine && s.headingLine < section.end) return s.headingLine;
+  }
+  return section.end;
+}
+
+/**
+ * First line after the contiguous run of `|` rows that starts at the table
+ * header. A row appended after trailing prose renders as literal pipe text
+ * outside the table, which is invisible in the very table the section exists
+ * to hold.
+ */
+function tableEnd(lines: string[], table: TableShape, limit: number): number {
+  let i = table.headerLine;
+  while (i < limit && lines[i]?.trim().startsWith("|")) i++;
+  return i;
 }
 
 export interface AppendResult {
@@ -113,9 +151,9 @@ export function appendToSection(
   content: string,
   sectionName: string,
   text: string,
-  options: { dedupe?: boolean; notePath?: string } = {},
+  options: { dedupe?: boolean; notePath?: string; keepNewest?: number } = {},
 ): AppendResult {
-  const { dedupe = true, notePath = "note" } = options;
+  const { dedupe = true, notePath = "note", keepNewest } = options;
   const section = requireSection(content, sectionName, notePath);
   const lines = content.split("\n");
   const table = detectTable(content, section);
@@ -141,8 +179,11 @@ export function appendToSection(
     }
   }
 
-  const last = lastContentLine(lines, section);
-  const insertAt = last === -1 ? section.start : last + 1;
+  // Insert within the section's own content, not at the end of everything
+  // nested under it — and for a table, directly after the last row.
+  const bodyEnd = ownContentEnd(content, section);
+  const last = lastContentLine(lines, section.start, bodyEnd);
+  const insertAt = table ? tableEnd(lines, table, bodyEnd) : last === -1 ? section.start : last + 1;
   const before = lines.slice(0, insertAt);
   const after = lines.slice(insertAt);
 
@@ -152,11 +193,40 @@ export function appendToSection(
   if (last === -1 && before[before.length - 1]?.trim() !== "") block.push("");
   block.push(insertion);
 
+  const appended = [...before, ...block, ...after];
   return {
-    content: [...before, ...block, ...after].join("\n"),
+    content: keepNewest ? trimSection(appended, sectionName, keepNewest, table) : appended.join("\n"),
     changed: true,
     asTableRow: Boolean(table),
   };
+}
+
+/**
+ * Keep only the newest `keep` entries in a section — a bounded log, appended
+ * to and trimmed in one write. Without this the only way to cap a review log
+ * was a whole-file edit outside the tool surface, on an unattended run.
+ * Entries are dropped from the top, which is the oldest end for an append-only
+ * log; a table's header and divider are never counted or dropped.
+ */
+function trimSection(
+  lines: string[],
+  sectionName: string,
+  keep: number,
+  table: TableShape | null,
+): string {
+  const content = lines.join("\n");
+  const section = findSection(content, sectionName);
+  if (!section) return content;
+  const bodyEnd = ownContentEnd(content, section);
+  const first = table ? table.headerLine + 2 : section.start;
+
+  const entries: number[] = [];
+  for (let i = first; i < bodyEnd; i++) {
+    if (lines[i].trim() !== "") entries.push(i);
+  }
+  if (entries.length <= keep) return content;
+  const drop = new Set(entries.slice(0, entries.length - keep));
+  return lines.filter((_, i) => !drop.has(i)).join("\n");
 }
 
 function compare(line: string): string {
