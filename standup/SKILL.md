@@ -13,31 +13,29 @@ Generate a useful standup for the user by inspecting the Obsidian second brain, 
 
 ## Data Source
 
-Use the shared vault conventions from `second-brain`.
-
-- Vault config (name, path, CLI binary, timezone): see `second-brain` -> Vault. Examples assume vault name `Obsidian Vault`.
-- If the CLI returns `Vault not found`, follow the `second-brain` recovery steps (`open -g "obsidian://open?vault=Obsidian%20Vault"`, wait ~5s, retry up to 3x) before falling back.
-- Only after recovery fails, fall back to direct read-only file inspection under the vault path. Use bare commands like `cat "<path>"` — no redirects (`2>&1` included), pipes, chains, or globs; each triggers a manual exec approval (see `second-brain` Fallback Hygiene).
+Use the shared vault conventions and the `obsidian__*` tool surface from `second-brain`.
 
 Read from:
 
-- `Tasks.md` for checkbox tasks: due dates (`📅`), priorities (`⏫🔼🔽`), waiting states, project wikilinks. CLI shortcut: `tasks todo verbose`.
+- `Tasks.md` for checkbox tasks: due dates (`📅`), priorities (`⏫🔼🔽`), waiting states, project wikilinks.
 - `Projects/*/[Project Name].md` for project status (frontmatter `status:`), blockers, decisions, waiting items, and related tasks.
 - `People/*.md` only when pending conversations or waiting-on people need context.
 - `Inbox.md` for unprocessed actionable captures.
-- The most recent `Syntheses/YYYY-MM-DD.md` for overnight observations and candidates worth surfacing. Find it with `files vault="Obsidian Vault" folder="Syntheses" ext=md` — filenames are dates, so the max filename is the latest. An empty listing means no syntheses exist yet; skip the section, never re-check with shell `ls`.
-- `Daily/YYYY-MM-DD.md` and recent daily notes only when they appear relevant or project/task context is thin. A missing daily note is normal (nothing was logged that day) — a CLI `File not found` is authoritative; skip it, never re-check with shell reads.
+- The most recent `Syntheses/YYYY-MM-DD.md` for overnight observations worth surfacing.
+- Recent `Daily/YYYY-MM-DD.md` notes only when project/task context is thin.
 - `Standup.md` from the previous run for continuity and diff context.
+
+A missing note or an empty result is the answer, not a malfunction — no daily note on a quiet day and no synthesis before the first nightly run are both normal. Skip the section and move on.
 
 ## Workflow
 
 When asked to run standup, or when invoked by cron:
 
-1. Determine today's date in the local timezone.
-2. Read `Tasks.md`.
-3. Inspect active project notes under `Projects/*/`.
-4. Reconcile projects and tasks by exact project name / wikilink where possible.
-5. Check the latest synthesis note for observations or candidates worth flagging.
+1. `obsidian__vault_status` — today's local date, note counts, the latest synthesis and daily dates, and what changed recently. This replaces the old exploratory preamble; do not rediscover any of it by hand.
+2. `obsidian__vault_read note="Tasks"` for the full task list.
+3. `obsidian__vault_list type="project" status="Active"` for the active projects, then `obsidian__vault_read` each one worth reporting on.
+4. Reconcile projects and tasks by exact project name / wikilink.
+5. `obsidian__vault_read` the latest synthesis named by step 1, if there is one.
 6. Identify the highest-signal items:
    - active projects and their current state
    - overdue tasks
@@ -52,6 +50,8 @@ When asked to run standup, or when invoked by cron:
    - unprocessed inbox items that look actionable
 7. Write or replace `Standup.md` with the generated standup and timestamp.
 8. Reply in the current channel with the same standup, trimmed for readability.
+
+Five or six tool calls should cover a normal standup. If you find yourself making twenty, re-read step 1 — the information is already in hand.
 
 ## Relationship Rules
 
@@ -89,15 +89,15 @@ Use this structure unless the user asks for a different format:
 - Person/topic and project context.
 ```
 
-Omit empty sections. If there is not enough data, say so briefly and list the files checked.
+Omit empty sections. If there is not enough data, say so briefly and list the notes checked.
 
 ## Tone
 
-Be concise, practical, and specific. Prefer action-oriented phrasing over status theater. Do not invent dates, owners, or project states when the vault does not say them. When unsure, mark an item as unclear and include the source file name.
+Be concise, practical, and specific. Prefer action-oriented phrasing over status theater. Do not invent dates, owners, or project states when the vault does not say them. When unsure, mark an item as unclear and include the source note name.
 
 ## Updating `Standup.md`
 
-When writing `Standup.md`, include:
+`Standup.md` is regenerated whole each run, so write it with the native file write tool rather than appending. Include:
 
 ```markdown
 # Standup
@@ -107,8 +107,8 @@ Generated: YYYY-MM-DD HH:mm TZ
 [standup content]
 ```
 
-`TZ` is the local timezone abbreviation from the `second-brain` vault config (e.g. ET for `America/New_York`).
+`TZ` is the local timezone abbreviation from the `second-brain` vault config (e.g. ET for `America/New_York`). Take the date from `obsidian__vault_status`, which already reports it in local time.
 
 ## Cron Invocation
 
-For scheduled runs, use the same workflow as an on-demand run. Deliver the concise standup to the configured source channel. If the vault cannot be read, report the failure plainly with the command or file path that failed.
+For scheduled runs, use the same workflow as an on-demand run. Deliver the concise standup to the configured source channel. If a tool returns an error, report it plainly — the message names the fix — rather than retrying the same call or falling back to shell commands. There is no shell fallback for vault work.

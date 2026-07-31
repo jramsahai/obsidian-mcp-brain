@@ -2,9 +2,9 @@
 name: second-brain
 description: >
   Shared coordination layer for all Obsidian vault work: vault config, routing
-  rules, frontmatter standards, wikilink conventions, CLI usage and recovery,
-  permission guardrails, machine edit policy. Use alongside any second-brain
-  skill and to decide which specialized skill handles a capture.
+  rules, frontmatter standards, wikilink conventions, the obsidian__ tool
+  surface, and machine edit policy. Use alongside any second-brain skill and to
+  decide which specialized skill handles a capture.
 ---
 
 # Second Brain
@@ -13,77 +13,50 @@ Use this skill as the shared Obsidian/vault coordination layer. Keep workflow-sp
 
 ## Vault
 
-Single source of truth for vault config. Edit these values for your setup; the other second-brain skills reference this block.
-
 - Vault name: `Obsidian Vault`
-- Vault path: `~/Documents/Obsidian Vault/`
-- CLI: `/usr/local/bin/obsidian` (obsidian-cli talking to the running Obsidian app)
-- Local timezone: `America/New_York` (used for daily notes and date defaults)
-- The vault is a git repository (branch `main`). Git is the recovery mechanism for machine edits — prefer `/usr/bin/git -C "/Users/you/Documents/Obsidian Vault"` inspection/revert over `sync:restore` or `history:restore`. Automated passes snapshot before and after edits (see `nightly-consolidation`). Run git commands one at a time; never chain with `&&`.
-- Invoke every binary by absolute path: `/usr/bin/git`, `/usr/local/bin/obsidian`, `/bin/cat`, `/bin/ls`. A bare command name (`git`, `cat`) does not match the exec allowlist and is denied outright. Do not pass the vault path as `~/Documents/Obsidian\ Vault` — use the quoted absolute form `"/Users/you/Documents/Obsidian Vault"`.
-- Always pass `vault="Obsidian Vault"` to Obsidian CLI commands.
-- If your vault is named differently, substitute the name in every `vault=` argument shown across these skills.
-- Use command order: `/usr/local/bin/obsidian <command> vault="Obsidian Vault" ...`
-- CLI `file=`/`path=` arguments are vault-relative. Never pass an absolute filesystem path — the CLI treats it as relative and silently creates a nested `Users/...` mirror tree inside the vault.
-- Prefer the Obsidian CLI for search, read, move, rename, properties, links, tags, and backlinks — operations whose arguments are simple paths and queries that pass exec approval cleanly.
-- Write note bodies with the native file write/edit tools directly under `~/Documents/Obsidian Vault/` — never as a CLI `content=` argument. Multi-line or escaped content (`\n`/`\u{A}` escapes, `$`, backticks, backslashes) trips OpenClaw's dynamic-argument detection and forces a manual exec approval every time, even though the CLI binary is allowlisted. This covers `create` and any multi-line `append`/`prepend`. Obsidian picks up filesystem changes automatically. Exception: a short single-line plain-text `append`/`prepend` (e.g. an Inbox capture line) is fine via CLI.
-- Shell file fallback (`cat`, `ls`) only when the CLI is unreachable after the recovery steps below.
+- Vault path: `/Users/you/Documents/Obsidian Vault`
+- Local timezone: `America/New_York`
+- The vault is a git repository (branch `main`). Git is the recovery mechanism for machine edits; automated passes snapshot before and after with `obsidian__vault_snapshot`.
 
-### CLI Errors Are Authoritative
+All vault work goes through the `obsidian__*` tools. They talk to the vault filesystem directly — the Obsidian app does not need to be running, and no shell command is involved. Do not shell out to `obsidian-cli`, `git`, `cat`, or `ls` for vault work; those paths are gone.
 
-A CLI `File not found`, empty search result, or empty `files` listing is the answer, not a malfunction: the note or folder content does not exist. Do not re-verify with shell reads or `ls` — that burns an exec approval to confirm what the CLI already said. Missing notes are normal (e.g., no daily note on a day with no entries, no synthesis before the first nightly run); skip and move on. Shell fallback exists only for the case below, where the CLI itself is unreachable. To find the newest note in a folder of date-named files, list with `files folder="..."` and take the max filename — never shell `ls -lt`.
+## Tools
 
-### "Vault not found" Recovery
+Call `obsidian__vault_status` first in any scheduled or exploratory run. It answers today's date, git dirty state, note counts by type, latest synthesis and daily note, unresolved/orphan counts, and what changed in the last 24 hours — in one call, replacing a dozen exploratory reads.
 
-The CLI talks to the running Obsidian app. `Vault not found` means the vault window is closed, still loading, or suspended (App Nap) — NOT a vault name/path problem. Even `version` and `help` return it. Do not retry vault-name variants; recover instead:
+| Need | Tool |
+|---|---|
+| Orientation, today's date, git state | `obsidian__vault_status` |
+| Find notes by type, folder, status, or change date | `obsidian__vault_list` |
+| Read a note or one of its sections | `obsidian__vault_read` |
+| Full-text search | `obsidian__vault_search` |
+| Backlinks, outgoing links, unresolved, orphans, deadends | `obsidian__vault_links` |
+| Add a line under a specific heading | `obsidian__section_append` |
+| Add a task | `obsidian__task_add` |
+| Change or complete a task | `obsidian__task_update` |
+| Commit the vault | `obsidian__vault_snapshot` |
 
-1. Run `open -g "obsidian://open?vault=Obsidian%20Vault"` (launches app and/or opens the vault window in background).
-2. Wait ~5 seconds, retry the command.
-3. Still failing: retry up to 3 times total — a freshly opened or napping window wakes progressively (vault resolves before all commands register; `Command not found. It may require a plugin` right after a wake is also transient).
-4. Only after 3 failed retries, fall back to direct file operations and report that the CLI was unreachable.
+Two rules matter more than the rest:
 
-### Fallback Hygiene
+- **Never construct a file path.** `obsidian__vault_read` takes the note name as it appears in a wikilink — `Wayfinder`, `First Last` — and resolves the path itself. Passing a path you assembled by hand is how notes end up in the wrong place.
+- **An empty result is the answer.** No search hits, an empty listing, or a missing daily note means the content does not exist. Do not re-check it another way; move on.
 
-Direct-file fallback commands go through OpenClaw's exec approval. Allowlisted binaries auto-run only for simple invocations — redirects (`2>/dev/null`), pipes (`| head`), and globs (`*.md`) each force a manual approval prompt. In non-interactive runs (cron) there is nobody to approve, so a prompt is a hard denial. In fallback mode:
+Note bodies for brand-new notes are still written with the native file write/edit tools, directly under the vault path. Everything else — appending into an existing note, task lines, git — goes through the tools above.
 
-- Always use the absolute binary path with no shell decoration: `/bin/cat "<absolute path>"`, `/bin/ls -lt "<dir>"`. A bare `cat` or `ls` may miss the allowlist and be denied.
-- No redirects of any kind — `2>&1` and `2>/dev/null` both count and force a prompt. Errors surface fine without them; never add one to capture stderr.
-- Never chain with `&&` or `;`, never pipe, never glob (`*.md`) — list the directory first, then read explicit paths.
-- Prefer native file read/list tools over shell when available.
-
-Useful commands:
-
-```bash
-/usr/local/bin/obsidian read vault="Obsidian Vault" file="Tasks"
-/usr/local/bin/obsidian read vault="Obsidian Vault" path="Projects/Example Project/Example Project.md"
-/usr/local/bin/obsidian search vault="Obsidian Vault" query="Status: Active" format=json
-/usr/local/bin/obsidian append vault="Obsidian Vault" file="Inbox" content="- YYYY-MM-DD: capture"
-/usr/local/bin/obsidian files vault="Obsidian Vault" folder="Projects" ext=md
-/usr/local/bin/obsidian backlinks vault="Obsidian Vault" file="Example Project"
-/usr/local/bin/obsidian orphans vault="Obsidian Vault"
-/usr/local/bin/obsidian unresolved vault="Obsidian Vault"
-/usr/local/bin/obsidian property:set vault="Obsidian Vault" file="Note" name="status" value="Active"
-```
+Errors from these tools state the fix. Read the message and act on it rather than retrying the same call: a "not found" names the closest existing notes, a missing section lists the sections that exist, and a table section names its columns.
 
 ## Permission Guardrails
 
-Routine second-brain work can use the approved Obsidian CLI path without asking first:
-
-- Inspecting vault state: `version`, `vault`, `vaults`, `files`, `folders`, `read`, `search`, `search:context`, `outline`, `wordcount`.
-- Inspecting note relationships: `tags`, `aliases`, `links`, `backlinks`, `unresolved`, `orphans`, `deadends`, `properties`, `property:read`.
-- Managing normal notes: `move`, `rename`, `property:set`, `property:remove`, normal `daily:*` note operations, short single-line `append`/`prepend`, and direct file writes/edits of note bodies (see Vault rules).
-- Managing tasks through Obsidian's task commands when the user's intent is explicit.
-
-Ask the user before destructive, app-level, or code-execution operations:
+The tool surface is the guardrail: it exposes no delete, no move, no rename, no plugin control, and no app-level commands, so those cannot happen by accident. Ask the user before doing any of them by other means:
 
 - Permanent deletion, broad deletion, or any delete where intent is ambiguous.
 - Plugin/theme/snippet install, uninstall, enable, or disable.
 - Restricted mode changes.
-- `sync:restore`, `history:restore`, `restart`, developer/debug commands, or arbitrary `eval`.
-
-Direct Markdown writes/edits under `~/Documents/Obsidian Vault/` via the native file tools need no exec approval and are the default for note bodies. CLI `content=` arguments carrying multi-line or escaped text force a manual exec approval — avoid them (see Vault).
+- Sync or history restore, restart, developer/debug commands, or arbitrary `eval`.
 
 ## Vault Structure
+
+Orientation only — the tools derive paths, so never hand-construct one.
 
 ```text
 Projects/                       one folder per project
@@ -96,7 +69,7 @@ Daily/YYYY-MM-DD.md             daily journal entries
 Knowledge Base/                 personal factual/reference notes, organized by topic
   [Topic]/[Topic] MOC.md        map-of-content hub note once a topic matures
 Shopping/[Store Name].md        per-store shopping lists (checkbox items)
-Ideas/[Idea Name].md            pre-project idea notes with scorecards (folder if research accumulates)
+Ideas/[Idea Name].md            pre-project idea notes with scorecards
 Syntheses/YYYY-MM-DD.md         nightly consolidation synthesis notes
 Schedule/                       future calendar-related notes
 Tasks.md                        centralized checkbox task list
@@ -105,7 +78,7 @@ Standup.md                      generated standup output
 README.md                       system documentation
 ```
 
-Naming rule: name the note after the thing so wikilinks resolve. Project note = `Projects/[Project Name]/[Project Name].md`. Person note = `People/[First Last].md`. Never create a second `Overview.md`-style generic filename; ambiguous filenames break wikilink resolution.
+Naming rule: name the note after the thing so wikilinks resolve. Project note = `Projects/[Project Name]/[Project Name].md`. Person note = `People/[First Last].md`. Never create a generic `Overview.md`-style filename; ambiguous filenames break wikilink resolution.
 
 ## Frontmatter Standards
 
@@ -126,11 +99,15 @@ Shared keys on all notes: `type`, `created` (YYYY-MM-DD).
 | `idea` | `Ideas/` | `status` (candidate/researching/promoted/discarded), `topics` |
 | `index` | READMEs, Tasks.md, Inbox.md | — |
 
-When touching an existing note that lacks frontmatter, add it. Use `property:set` or a direct edit at the top of the file.
+When touching an existing note that lacks frontmatter, add it with a direct edit at the top of the file. `obsidian__section_append` never touches frontmatter.
 
 ## Writing Into Notes
 
-CLI `append`/`prepend` operate on the whole file. That is correct for short single-line additions to flat list files (`Inbox.md`, `Shopping/*.md`, `Knowledge Base/Inbox.md`); multi-line additions (e.g. a brand-new section at the end of a note) go through direct file edit instead — multi-line `content=` args force an exec approval (see Vault). File-level append is wrong for adding content under an existing heading of a templated note (daily sections, `## Conversation History` tables, `## Pending Topics`, `## Related`) — file-level append dumps the content after the last section instead. For section-targeted additions: read the note, then edit it so the new line lands at the end of the correct section.
+Use `obsidian__section_append` for anything that belongs under an existing heading — daily sections, `## Conversation History`, `## Pending Topics`, `## Related`, activity logs. It finds the section and appends at the end of it, so content cannot land after the wrong heading or at the bottom of the file. When the section holds a table it appends a table row; pass the content pipe-delimited (`| 2026-07-31 | Topic | Summary |`) and it will tell you the columns if you get it wrong.
+
+Repeat calls are safe: identical content is skipped rather than duplicated.
+
+Whole new notes are written with the native file write tool at the path the naming rules above dictate.
 
 ## Linking Rules (Wikilinks First)
 
@@ -140,12 +117,12 @@ Links are the graph — backlinks, graph view, and any future UI all come from w
 - Person mentions -> `[[First Last]]`.
 - Daily note references -> `[[YYYY-MM-DD]]`.
 - Knowledge notes -> `[[Note Title]]`, and link them from projects, tasks, daily notes, and people notes when they contain reusable reference.
-- Tasks in `Tasks.md` link their project with `[[Project Name]]` inline in the task line.
-- A wikilink to a note that does not exist yet is fine — it is an intentional "unresolved link" that marks a candidate note and still shows in the graph. Do not create the target note just to satisfy the link.
+- Tasks in `Tasks.md` link their project with `[[Project Name]]` inline — `obsidian__task_add` does this for you from the `project` argument.
+- A wikilink to a note that does not exist yet is fine — it is an intentional "unresolved link" that marks a candidate note and still shows in the graph. Do not create the target note just to satisfy the link. `obsidian__vault_links direction=unresolved` lists them.
 
 Other shared rules:
 
-- Use exact project names consistently between the project note and task lines in `Tasks.md`.
+- Use exact project names consistently between the project note and task lines in `Tasks.md`. `obsidian__task_add` rejects a project with no note rather than creating a dangling link.
 - Reference tasks from project files by clear task text under `## Related Tasks`.
 - Do not turn a knowledge-base capture into a task, project decision, journal entry, or people note unless the user's wording clearly calls for that extra routing.
 - Do not infer task completion from project status, or project status from task completion, unless the user says so explicitly.
@@ -153,15 +130,16 @@ Other shared rules:
 
 ## Edit Policy for Machine Changes
 
-What automated passes (nightly consolidation, entity linking) may do to existing notes:
+What automated passes (nightly consolidation, entity linking) may do to existing notes. Where a tool enforces the rule, it is named — that rule needs no vigilance from you.
 
 - Allowed inline: converting a plain-text mention of an existing person, project, or knowledge note into a wikilink — exact same words, only brackets added. Never linkify inside headings, code blocks, URLs, frontmatter values (other than the designated wikilink properties), or text already inside a link.
-- Everything else is append-only: `## Related` sections, MOC updates, synthesis notes, review-log entries.
-- Idempotent re-runs: before adding a link, `## Related` entry, or MOC line, check it is not already present. Re-running a pass over the same notes must change nothing.
+- Everything else is append-only: `## Related` sections, MOC updates, synthesis notes, review-log entries. *Enforced by `obsidian__section_append`, which only ever appends.*
+- Idempotent re-runs: re-running a pass over the same notes must change nothing. *Enforced by `obsidian__section_append` deduping identical content, and by `obsidian__task_add` rejecting near-duplicate tasks.*
 - Never rewrite, reorder, or summarize user prose, especially in `Daily/` notes.
-- Never delete. Merging means all content lands in the destination.
-- Inbox routing is the one sanctioned move: route an item out of `Inbox.md` or `Knowledge Base/Inbox.md` by writing it to its destination first, then removing the routed line from the inbox. Never remove before the destination write succeeded; never leave the item in both places.
+- Never delete. Merging means all content lands in the destination. *Enforced by the tool surface: nothing exposed deletes a note.*
+- Inbox routing is the one sanctioned move: write the item to its destination first, verify, then remove the routed line from the inbox. Never remove before the destination write succeeded; never leave the item in both places.
 - Trimming `## Review Log` entries beyond the ~20 newest is sanctioned bookkeeping, not content deletion.
+- Snapshot before and after any automated pass with `obsidian__vault_snapshot`. One reviewable commit per pass is the recovery story.
 
 ## Routing
 
