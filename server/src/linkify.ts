@@ -1,6 +1,6 @@
 import { extractLinks } from "./links.ts";
 import { isWordBoundary, overlapsProtected, protectedRanges, scanLines } from "./scan.ts";
-import { getIndex, GENERIC_NAMES, readNote, type Note } from "./vault.ts";
+import { getIndex, GENERIC_NAMES, isTemplate, readNote, type Note } from "./vault.ts";
 
 /**
  * Mechanical entity linking. This tool is deliberately stupid: it converts a
@@ -16,7 +16,7 @@ const LINKABLE_TYPES = new Set(["project", "person", "knowledge", "moc", "idea"]
 /** Notes never edited by a linkify pass. */
 function isProtectedNote(note: Note): boolean {
   return (
-    note.path.endsWith("Template.md") ||
+    isTemplate(note) ||
     // Tasks.md has a positional grammar: the first wikilink on a line is the
     // task's project. Inserting a person link ahead of it would silently
     // reassign every task it touched.
@@ -56,7 +56,7 @@ export function buildEntities(notes: Note[] = getIndex().notes): Entity[] {
   const entities: Entity[] = [];
   for (const note of notes) {
     if (!note.type || !LINKABLE_TYPES.has(note.type)) continue;
-    if (note.path.endsWith("Template.md")) continue;
+    if (isTemplate(note)) continue;
     for (const phrase of [note.title, ...note.aliases]) {
       if (eligible(phrase)) entities.push({ phrase, title: note.title, path: note.path });
     }

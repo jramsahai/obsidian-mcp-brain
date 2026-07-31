@@ -42,6 +42,7 @@ import {
 import {
   findNote,
   getIndex,
+  isTemplate,
   nearestTitles,
   readNote,
   resolveNote,
@@ -108,7 +109,10 @@ function enumArg<T extends string>(
 }
 
 function templateOrder(note: Note): string[] {
-  const template = note.folder ? findNoteSafe(`${note.folder}/Template.md`) : null;
+  if (!note.folder) return [];
+  const template = getIndex().notes.find(
+    (n) => n.folder === note.folder && isTemplate(n) && n.path !== note.path,
+  );
   if (!template) return [];
   const { content } = readNote(template);
   return listSections(content)
@@ -141,7 +145,7 @@ const vaultStatus: ToolDef = {
     }
     const graph = buildGraph();
     const orphans = idx.notes.filter(
-      (n) => (graph.incoming.get(n.path) ?? []).length === 0 && !n.path.endsWith("Template.md"),
+      (n) => (graph.incoming.get(n.path) ?? []).length === 0 && !isTemplate(n),
     );
     const cutoff = Date.now() - 24 * 60 * 60 * 1000;
     const changed = idx.notes.filter((n) => n.mtimeMs >= cutoff).map((n) => n.path);
@@ -381,7 +385,7 @@ const vaultLinks: ToolDef = {
         unresolved: entries.slice(0, limit),
       };
     }
-    const notes = getIndex().notes.filter((n) => !n.path.endsWith("Template.md"));
+    const notes = getIndex().notes.filter((n) => !isTemplate(n));
     const list =
       direction === "orphans"
         ? notes.filter((n) => (graph.incoming.get(n.path) ?? []).length === 0)

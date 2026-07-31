@@ -1,5 +1,5 @@
 import { scanLines } from "./scan.ts";
-import { findNote, getIndex, readNote, stripWikilink, type Note } from "./vault.ts";
+import { findNote, getIndex, isTemplate, readNote, stripWikilink, type Note } from "./vault.ts";
 
 const WIKILINK_RE = /\[\[([^\][\n]+)\]\]/g;
 
@@ -28,10 +28,6 @@ export interface Graph {
   incoming: Map<string, string[]>;
   /** target text → paths of notes linking to it, for targets with no note. */
   unresolved: Map<string, string[]>;
-}
-
-function isTemplate(note: Note): boolean {
-  return note.path.endsWith("Template.md");
 }
 
 export function buildGraph(): Graph {

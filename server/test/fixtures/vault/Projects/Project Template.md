@@ -5,6 +5,7 @@ created: YYYY-MM-DD
 started: YYYY-MM-DD
 people: []
 topics: []
+template: true
 ---
 
 # [Project Name]

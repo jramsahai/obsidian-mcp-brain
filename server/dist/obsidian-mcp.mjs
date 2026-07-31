@@ -16081,6 +16081,9 @@ function preferAmong(titleKey, matches) {
   if (root.length === 1) return root[0];
   return null;
 }
+function isTemplate(note) {
+  return note.frontmatter?.template === true;
+}
 function stripWikilink(ref) {
   let value = ref.trim();
   const link = /^\[\[([^\]]+)\]\]$/.exec(value);
@@ -16131,9 +16134,6 @@ function extractLinks(content) {
     }
   }
   return targets;
-}
-function isTemplate(note) {
-  return note.path.endsWith("Template.md");
 }
 function buildGraph() {
   const idx = getIndex();
@@ -16194,7 +16194,7 @@ function searchVault(query, options = {}) {
 // src/linkify.ts
 var LINKABLE_TYPES = /* @__PURE__ */ new Set(["project", "person", "knowledge", "moc", "idea"]);
 function isProtectedNote(note) {
-  return note.path.endsWith("Template.md") || // Tasks.md has a positional grammar: the first wikilink on a line is the
+  return isTemplate(note) || // Tasks.md has a positional grammar: the first wikilink on a line is the
   // task's project. Inserting a person link ahead of it would silently
   // reassign every task it touched.
   note.path === "Tasks.md" || // Standup.md is regenerated every morning, so any link added here is
@@ -16282,7 +16282,7 @@ function buildEntities(notes = getIndex().notes) {
   const entities = [];
   for (const note of notes) {
     if (!note.type || !LINKABLE_TYPES.has(note.type)) continue;
-    if (note.path.endsWith("Template.md")) continue;
+    if (isTemplate(note)) continue;
     for (const phrase of [note.title, ...note.aliases]) {
       if (eligible(phrase)) entities.push({ phrase, title: note.title, path: note.path });
     }
@@ -16978,7 +16978,10 @@ function enumArg(args, key, allowed, required2 = false) {
   return match;
 }
 function templateOrder(note) {
-  const template = note.folder ? findNoteSafe(`${note.folder}/Template.md`) : null;
+  if (!note.folder) return [];
+  const template = getIndex().notes.find(
+    (n) => n.folder === note.folder && isTemplate(n) && n.path !== note.path
+  );
   if (!template) return [];
   const { content } = readNote(template);
   return listSections(content).filter((s) => s.level === 2).map((s) => s.name);
@@ -17004,7 +17007,7 @@ var vaultStatus = {
     }
     const graph = buildGraph();
     const orphans = idx.notes.filter(
-      (n) => (graph.incoming.get(n.path) ?? []).length === 0 && !n.path.endsWith("Template.md")
+      (n) => (graph.incoming.get(n.path) ?? []).length === 0 && !isTemplate(n)
     );
     const cutoff = Date.now() - 24 * 60 * 60 * 1e3;
     const changed = idx.notes.filter((n) => n.mtimeMs >= cutoff).map((n) => n.path);
@@ -17213,7 +17216,7 @@ var vaultLinks = {
         unresolved: entries.slice(0, limit)
       };
     }
-    const notes = getIndex().notes.filter((n) => !n.path.endsWith("Template.md"));
+    const notes = getIndex().notes.filter((n) => !isTemplate(n));
     const list = direction === "orphans" ? notes.filter((n) => (graph.incoming.get(n.path) ?? []).length === 0) : notes.filter((n) => (graph.out.get(n.path) ?? []).length === 0);
     return {
       direction,

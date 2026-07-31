@@ -2,6 +2,7 @@
 type: daily
 date: YYYY-MM-DD
 created: YYYY-MM-DD
+template: true
 ---
 
 # Daily Note — YYYY-MM-DD

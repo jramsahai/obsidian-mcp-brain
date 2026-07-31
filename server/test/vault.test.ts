@@ -46,7 +46,7 @@ describe("vault_list", () => {
     const result = call("vault_list", { type: "project" });
     assert.deepEqual(
       result.notes.map((n: { title: string }) => n.title).sort(),
-      ["Example Project", "Template"],
+      ["Example Project", "Project Template"],
     );
   });
 
@@ -96,9 +96,10 @@ describe("ambiguous note names", () => {
   });
 
   test("a collision with no convention to appeal to still errors, listing the paths", () => {
-    const message = callFails("vault_read", { note: "Template" });
+    const message = callFails("vault_read", { note: "Overlap" });
     assert.match(message, /ambiguous — 2 notes share that name/);
-    assert.match(message, /Daily\/Template\.md/);
+    assert.match(message, /Knowledge Base\/Pricing\/Overlap\.md/);
+    assert.match(message, /Knowledge Base\/Tools\/Overlap\.md/);
     assert.match(message, /Pass the full vault-relative path/);
   });
 
@@ -162,7 +163,7 @@ describe("vault_links", () => {
     assert.ok(!targets.includes("Not A Real Link"));
     assert.ok(!targets.includes("Also Not A Link"));
     // Nor are template placeholders. Counting `[[First Last]]` from
-    // Projects/Template.md put a phantom candidate in every nightly report
+    // Projects/Project Template.md put a phantom candidate in every report
     // that the user had no way to ever resolve.
     assert.ok(!targets.includes("First Last"));
   });

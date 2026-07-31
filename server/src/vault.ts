@@ -216,6 +216,16 @@ function preferAmong(titleKey: string, matches: Note[]): Note | null {
   return null;
 }
 
+/**
+ * Templates are declared in frontmatter, not inferred from the filename.
+ * Matching a `Template.md` suffix quietly swallowed `Knowledge Base/Procurement/Vendor
+ * Query Template.md` — an ordinary knowledge note — excluding it from
+ * the link graph and from linkify's entity list with no way to notice.
+ */
+export function isTemplate(note: Note): boolean {
+  return note.frontmatter?.template === true;
+}
+
 export function stripWikilink(ref: string): string {
   let value = ref.trim();
   const link = /^\[\[([^\]]+)\]\]$/.exec(value);

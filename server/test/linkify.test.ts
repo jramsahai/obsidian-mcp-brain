@@ -16,7 +16,15 @@ describe("linkify entity selection", () => {
     assert.ok(phrases.includes("Jane Doe"));
     assert.ok(phrases.includes("Pricing Models"));
     assert.ok(phrases.includes("Wayfinder"));
-    assert.ok(!phrases.includes("Template"));
+    assert.ok(!phrases.includes("Project Template"));
+  });
+
+  test("a note is only a template if its frontmatter says so, not its filename", () => {
+    // `Knowledge Base/Procurement/Vendor Query Template.md` is an ordinary
+    // knowledge note. Matching a `Template.md` filename suffix silently
+    // dropped it from the entity list and from the whole link graph.
+    const phrases = buildEntities().map((e) => e.phrase);
+    assert.ok(phrases.includes("Vendor Query Template"));
   });
 
   test("orders longest first so a longer name wins over a shorter one it contains", () => {
@@ -27,10 +35,10 @@ describe("linkify entity selection", () => {
   test("drops single-word names that read as ordinary English", () => {
     // The "a person named Will, a project named Video" false positive.
     const notes = [
-      { title: "Will", type: "person", aliases: [], path: "People/Will.md" },
-      { title: "Video", type: "project", aliases: [], path: "Projects/Video/Video.md" },
-      { title: "Ann", type: "person", aliases: [], path: "People/Ann.md" },
-      { title: "Wayfinder", type: "knowledge", aliases: [], path: "KB/Wayfinder.md" },
+      { title: "Will", type: "person", aliases: [], path: "People/Will.md", frontmatter: {} },
+      { title: "Video", type: "project", aliases: [], path: "Projects/Video/Video.md", frontmatter: {} },
+      { title: "Ann", type: "person", aliases: [], path: "People/Ann.md", frontmatter: {} },
+      { title: "Wayfinder", type: "knowledge", aliases: [], path: "KB/Wayfinder.md", frontmatter: {} },
     ] as any;
     assert.deepEqual(
       buildEntities(notes).map((e) => e.phrase),
@@ -79,6 +87,7 @@ describe("linkify exclusion zones", () => {
         type: "knowledge",
         aliases: ["Role Proposal Draft"],
         path: "Projects/X/Docs/role-proposal-draft.md",
+        frontmatter: {},
       },
     ] as any;
     assert.deepEqual(
