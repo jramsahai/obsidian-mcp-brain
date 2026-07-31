@@ -77,6 +77,37 @@ describe("vault_list", () => {
   });
 });
 
+describe("ambiguous note names", () => {
+  test("a bare date is the daily note, not the synthesis of the same day", () => {
+    // Every synthesis written on a day that also has a journal entry creates
+    // this collision, so it has to resolve by convention rather than error.
+    const result = call("vault_read", { note: "2026-07-20" });
+    assert.equal(result.path, "Daily/2026-07-20.md");
+  });
+
+  test("the synthesis is still reachable by path", () => {
+    assert.equal(call("vault_read", { note: "Syntheses/2026-07-20" }).path, "Syntheses/2026-07-20.md");
+    assert.equal(call("vault_read", { note: "Daily/2026-07-20" }).path, "Daily/2026-07-20.md");
+  });
+
+  test("a bare name means the note at the vault root", () => {
+    assert.equal(call("vault_read", { note: "Inbox" }).path, "Inbox.md");
+    assert.equal(call("vault_read", { note: "Knowledge Base/Inbox" }).path, "Knowledge Base/Inbox.md");
+  });
+
+  test("a collision with no convention to appeal to still errors, listing the paths", () => {
+    const message = callFails("vault_read", { note: "Template" });
+    assert.match(message, /ambiguous — 2 notes share that name/);
+    assert.match(message, /Daily\/Template\.md/);
+    assert.match(message, /Pass the full vault-relative path/);
+  });
+
+  test("wikilink and alias forms resolve the same way", () => {
+    assert.equal(call("vault_read", { note: "[[2026-07-20]]" }).path, "Daily/2026-07-20.md");
+    assert.equal(call("vault_read", { note: "[[2026-07-20|that day]]" }).path, "Daily/2026-07-20.md");
+  });
+});
+
 describe("vault_search", () => {
   test("returns matching lines with line numbers", () => {
     const result = call("vault_search", { query: "vendor quote" });

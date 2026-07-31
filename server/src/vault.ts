@@ -180,15 +180,39 @@ export function findNote(ref: string): Note | null {
   const byTitle = idx.byTitle.get(titleKey);
   if (byTitle && byTitle.length === 1) return byTitle[0];
   if (byTitle && byTitle.length > 1) {
-    // Prefer the canonical `Folder/Name/Name.md` shape over stray duplicates.
-    const canonical = byTitle.find((n) => basename(dirname(n.path)) === n.title);
-    if (canonical) return canonical;
+    const preferred = preferAmong(titleKey, byTitle);
+    if (preferred) return preferred;
     throw new ToolError(
       `note "${cleaned}" is ambiguous — ${byTitle.length} notes share that name: ${byTitle
         .map((n) => n.path)
         .join(", ")}. Pass the full vault-relative path instead.`,
     );
   }
+  return null;
+}
+
+const DATE_TITLE_RE = /^\d{4}-\d{2}-\d{2}$/;
+
+/**
+ * Break a title tie using the vault's own stated conventions, rather than
+ * failing on collisions the layout makes inevitable. Anything not covered here
+ * still errors, because there is no convention to appeal to.
+ */
+function preferAmong(titleKey: string, matches: Note[]): Note | null {
+  // `[[YYYY-MM-DD]]` means the daily note — second-brain states this outright,
+  // and a synthesis that lands on a day with a journal entry would otherwise
+  // make the reference ambiguous forever after.
+  if (DATE_TITLE_RE.test(titleKey)) {
+    const daily = matches.find((n) => n.folder === "Daily");
+    if (daily) return daily;
+  }
+  // The canonical `Folder/Name/Name.md` project shape.
+  const canonical = matches.find((n) => basename(dirname(n.path)) === n.title);
+  if (canonical) return canonical;
+  // A bare name means the top-level note when exactly one lives at the root:
+  // `[[Inbox]]` is the vault inbox, not `Knowledge Base/Inbox.md`.
+  const root = matches.filter((n) => n.folder === "");
+  if (root.length === 1) return root[0];
   return null;
 }
 

@@ -16061,12 +16061,24 @@ function findNote(ref) {
   const byTitle = idx.byTitle.get(titleKey);
   if (byTitle && byTitle.length === 1) return byTitle[0];
   if (byTitle && byTitle.length > 1) {
-    const canonical = byTitle.find((n) => basename(dirname(n.path)) === n.title);
-    if (canonical) return canonical;
+    const preferred = preferAmong(titleKey, byTitle);
+    if (preferred) return preferred;
     throw new ToolError(
       `note "${cleaned}" is ambiguous \u2014 ${byTitle.length} notes share that name: ${byTitle.map((n) => n.path).join(", ")}. Pass the full vault-relative path instead.`
     );
   }
+  return null;
+}
+var DATE_TITLE_RE = /^\d{4}-\d{2}-\d{2}$/;
+function preferAmong(titleKey, matches) {
+  if (DATE_TITLE_RE.test(titleKey)) {
+    const daily = matches.find((n) => n.folder === "Daily");
+    if (daily) return daily;
+  }
+  const canonical = matches.find((n) => basename(dirname(n.path)) === n.title);
+  if (canonical) return canonical;
+  const root = matches.filter((n) => n.folder === "");
+  if (root.length === 1) return root[0];
   return null;
 }
 function stripWikilink(ref) {
