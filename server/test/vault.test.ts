@@ -52,12 +52,28 @@ describe("vault_list", () => {
 
   test("latest returns only the newest date-named note", () => {
     const result = call("vault_list", { folder: "Syntheses", latest: true });
-    assert.equal(result.count, 1);
+    assert.equal(result.total, 1);
     assert.equal(result.notes[0].title, "2026-07-22");
   });
 
   test("filters by status", () => {
-    assert.equal(call("vault_list", { status: "Active" }).count, 2);
+    assert.equal(call("vault_list", { status: "Active" }).total, 2);
+  });
+
+  test("says so when a cap hides notes", () => {
+    const result = call("vault_list", { limit: 2 });
+    assert.equal(result.returned, 2);
+    assert.ok(result.total > 2);
+    assert.equal(result.truncated, true);
+    assert.match(result.note, /more notes exist/);
+    assert.equal(result.notes.length, 2);
+  });
+
+  test("does not claim truncation when everything fits", () => {
+    const result = call("vault_list", { type: "project" });
+    assert.equal(result.truncated, false);
+    assert.equal(result.note, undefined);
+    assert.equal(result.returned, result.total);
   });
 });
 
@@ -76,6 +92,28 @@ describe("vault_search", () => {
       ["People/Jane Doe.md"],
     );
   });
+
+  test("reports the true match count even when the limit hides notes", () => {
+    const all = call("vault_search", { query: "Example Project" });
+    assert.ok(all.total_matching_notes > 1, "fixture should match several notes");
+    assert.equal(all.truncated, false);
+
+    const capped = call("vault_search", { query: "Example Project", limit: 1 });
+    // The count must describe the vault, not the page — this is the bug that
+    // made partial evidence look complete.
+    assert.equal(capped.total_matching_notes, all.total_matching_notes);
+    assert.equal(capped.returned, 1);
+    assert.equal(capped.truncated, true);
+    assert.match(capped.note, /more notes matched/);
+  });
+
+  test("reports matching lines hidden within a single note", () => {
+    const result = call("vault_search", { query: "-" });
+    const busiest = result.results.find((r: { more_matches?: number }) => r.more_matches);
+    assert.ok(busiest, "a note with more than 5 matching lines should report the remainder");
+    assert.ok(busiest.more_matches > 0);
+    assert.equal(busiest.matches.length, 5);
+  });
 });
 
 describe("vault_links", () => {
@@ -92,6 +130,13 @@ describe("vault_links", () => {
     // Links inside code fences are not real edges.
     assert.ok(!targets.includes("Not A Real Link"));
     assert.ok(!targets.includes("Also Not A Link"));
+  });
+
+  test("reports the true orphan count when the list is capped", () => {
+    const result = call("vault_links", { direction: "orphans", limit: 1 });
+    assert.equal(result.returned, 1);
+    assert.ok(result.total >= 1);
+    assert.equal(result.truncated, result.total > 1);
   });
 
   test("in and out require a note and say so", () => {

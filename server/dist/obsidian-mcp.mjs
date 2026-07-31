@@ -15841,6 +15841,7 @@ function buildGraph() {
   }
   return { out, incoming, unresolved };
 }
+var MATCHES_PER_NOTE = 5;
 function searchVault(query, options = {}) {
   const { type, folder, limit = 20 } = options;
   const needle = query.toLowerCase();
@@ -15852,18 +15853,20 @@ function searchVault(query, options = {}) {
     }
     const { content } = readNote(note);
     const matches = [];
+    let extra = 0;
     const titleHit = note.title.toLowerCase().includes(needle) || note.aliases.some((a) => a.toLowerCase().includes(needle));
     content.split("\n").forEach((line, i) => {
-      if (matches.length < 5 && line.toLowerCase().includes(needle)) {
-        matches.push({ line: i + 1, text: line.trim().slice(0, 240) });
-      }
+      if (!line.toLowerCase().includes(needle)) return;
+      if (matches.length < MATCHES_PER_NOTE) matches.push({ line: i + 1, text: line.trim().slice(0, 240) });
+      else extra++;
     });
     if (matches.length || titleHit) {
-      hits.push({ path: note.path, title: note.title, type: note.type, matches });
+      const hit = { path: note.path, title: note.title, type: note.type, matches };
+      if (extra > 0) hit.more_matches = extra;
+      hits.push(hit);
     }
-    if (hits.length >= limit) break;
   }
-  return hits;
+  return { hits: hits.slice(0, limit), total: hits.length, truncated: hits.length > limit };
 }
 
 // src/sections.ts
@@ -16340,7 +16343,7 @@ var vaultList = {
       notes = newest ? [newest] : [];
     }
     return {
-      count: notes.length,
+      ...truncation(notes.length, Math.min(notes.length, limit), "notes"),
       notes: notes.slice(0, limit).map((n) => ({
         path: n.path,
         title: n.title,
@@ -16351,6 +16354,15 @@ var vaultList = {
     };
   }
 };
+function truncation(total, returned, unit) {
+  const truncated = returned < total;
+  return {
+    total,
+    returned,
+    truncated,
+    ...truncated ? { note: `${total - returned} more ${unit} exist. Raise limit to see them.` } : {}
+  };
+}
 var vaultRead = {
   name: "vault_read",
   description: 'Read a note by wikilink target (e.g. "Wayfinder") or vault-relative path. Never construct file paths by hand \u2014 the plain note name is enough. Pass section to read only one section.',
@@ -16403,18 +16415,27 @@ var vaultSearch = {
       query: { type: "string", description: "Text to find. Case-insensitive substring match." },
       type: { type: "string", description: "Restrict to notes with this frontmatter type." },
       folder: { type: "string", description: "Restrict to a top-level folder." },
-      limit: { type: "number", description: "Maximum notes to return. Default 20." }
+      limit: {
+        type: "number",
+        description: "Maximum notes to return. Default 20. The whole vault is always searched; when more matched than were returned the result says so."
+      }
     },
     required: ["query"],
     additionalProperties: false
   },
   handler: (args) => {
-    const hits = searchVault(req(args, "query"), {
+    const { hits, total, truncated } = searchVault(req(args, "query"), {
       type: str(args, "type"),
       folder: str(args, "folder"),
       limit: num(args, "limit") ?? 20
     });
-    return { count: hits.length, results: hits };
+    return {
+      total_matching_notes: total,
+      returned: hits.length,
+      truncated,
+      ...truncated ? { note: `${total - hits.length} more notes matched. Raise limit or narrow the query to see them.` } : {},
+      results: hits
+    };
   }
 };
 var DIRECTIONS = ["in", "out", "unresolved", "orphans", "deadends"];
@@ -16444,18 +16465,31 @@ var vaultLinks = {
       if (!ref) throw new ToolError(`note is required when direction is "${direction}".`);
       const note = resolveNote(ref);
       const links = direction === "in" ? graph.incoming.get(note.path) ?? [] : graph.out.get(note.path) ?? [];
-      return { note: note.path, direction, count: links.length, links: links.slice(0, limit) };
+      return {
+        note: note.path,
+        direction,
+        ...truncation(links.length, Math.min(links.length, limit), "links"),
+        links: links.slice(0, limit)
+      };
     }
     if (direction === "unresolved") {
       const entries = [...graph.unresolved.entries()].map(([target, sources]) => ({
         target,
         linked_from: sources
       }));
-      return { direction, count: entries.length, unresolved: entries.slice(0, limit) };
+      return {
+        direction,
+        ...truncation(entries.length, Math.min(entries.length, limit), "unresolved targets"),
+        unresolved: entries.slice(0, limit)
+      };
     }
     const notes = getIndex().notes.filter((n) => !n.path.endsWith("Template.md"));
     const list = direction === "orphans" ? notes.filter((n) => (graph.incoming.get(n.path) ?? []).length === 0) : notes.filter((n) => (graph.out.get(n.path) ?? []).length === 0);
-    return { direction, count: list.length, notes: list.slice(0, limit).map((n) => n.path) };
+    return {
+      direction,
+      ...truncation(list.length, Math.min(list.length, limit), "notes"),
+      notes: list.slice(0, limit).map((n) => n.path)
+    };
   }
 };
 var sectionAppend = {

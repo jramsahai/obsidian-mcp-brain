@@ -67,17 +67,34 @@ export function buildGraph(): Graph {
   return { out, incoming, unresolved };
 }
 
+const MATCHES_PER_NOTE = 5;
+
 export interface SearchHit {
   path: string;
   title: string;
   type?: string;
   matches: { line: number; text: string }[];
+  /** Matching lines beyond the ones returned for this note. */
+  more_matches?: number;
 }
 
+export interface SearchResult {
+  hits: SearchHit[];
+  /** Notes that matched in total, whether or not they were returned. */
+  total: number;
+  truncated: boolean;
+}
+
+/**
+ * Always scans the whole vault, then truncates — never stops early. A search
+ * that quietly stopped looking would report a total it had not actually
+ * counted, and the caller would read partial evidence as complete. At ~120
+ * notes the full scan costs milliseconds.
+ */
 export function searchVault(
   query: string,
   options: { type?: string; folder?: string; limit?: number } = {},
-): SearchHit[] {
+): SearchResult {
   const { type, folder, limit = 20 } = options;
   const needle = query.toLowerCase();
   const hits: SearchHit[] = [];
@@ -89,18 +106,20 @@ export function searchVault(
     }
     const { content } = readNote(note);
     const matches: { line: number; text: string }[] = [];
+    let extra = 0;
     const titleHit =
       note.title.toLowerCase().includes(needle) ||
       note.aliases.some((a) => a.toLowerCase().includes(needle));
     content.split("\n").forEach((line, i) => {
-      if (matches.length < 5 && line.toLowerCase().includes(needle)) {
-        matches.push({ line: i + 1, text: line.trim().slice(0, 240) });
-      }
+      if (!line.toLowerCase().includes(needle)) return;
+      if (matches.length < MATCHES_PER_NOTE) matches.push({ line: i + 1, text: line.trim().slice(0, 240) });
+      else extra++;
     });
     if (matches.length || titleHit) {
-      hits.push({ path: note.path, title: note.title, type: note.type, matches });
+      const hit: SearchHit = { path: note.path, title: note.title, type: note.type, matches };
+      if (extra > 0) hit.more_matches = extra;
+      hits.push(hit);
     }
-    if (hits.length >= limit) break;
   }
-  return hits;
+  return { hits: hits.slice(0, limit), total: hits.length, truncated: hits.length > limit };
 }

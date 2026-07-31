@@ -202,7 +202,7 @@ const vaultList: ToolDef = {
       notes = newest ? [newest] : [];
     }
     return {
-      count: notes.length,
+      ...truncation(notes.length, Math.min(notes.length, limit), "notes"),
       notes: notes.slice(0, limit).map((n) => ({
         path: n.path,
         title: n.title,
@@ -213,6 +213,22 @@ const vaultList: ToolDef = {
     };
   },
 };
+
+/**
+ * A capped list must say it was capped. A bare `count` next to a short array
+ * reads as "this is everything" to a caller that is not comparing lengths.
+ */
+function truncation(total: number, returned: number, unit: string) {
+  const truncated = returned < total;
+  return {
+    total,
+    returned,
+    truncated,
+    ...(truncated
+      ? { note: `${total - returned} more ${unit} exist. Raise limit to see them.` }
+      : {}),
+  };
+}
 
 const vaultRead: ToolDef = {
   name: "vault_read",
@@ -272,18 +288,30 @@ const vaultSearch: ToolDef = {
       query: { type: "string", description: "Text to find. Case-insensitive substring match." },
       type: { type: "string", description: "Restrict to notes with this frontmatter type." },
       folder: { type: "string", description: "Restrict to a top-level folder." },
-      limit: { type: "number", description: "Maximum notes to return. Default 20." },
+      limit: {
+        type: "number",
+        description:
+          "Maximum notes to return. Default 20. The whole vault is always searched; when more matched than were returned the result says so.",
+      },
     },
     required: ["query"],
     additionalProperties: false,
   },
   handler: (args) => {
-    const hits = searchVault(req(args, "query"), {
+    const { hits, total, truncated } = searchVault(req(args, "query"), {
       type: str(args, "type"),
       folder: str(args, "folder"),
       limit: num(args, "limit") ?? 20,
     });
-    return { count: hits.length, results: hits };
+    return {
+      total_matching_notes: total,
+      returned: hits.length,
+      truncated,
+      ...(truncated
+        ? { note: `${total - hits.length} more notes matched. Raise limit or narrow the query to see them.` }
+        : {}),
+      results: hits,
+    };
   },
 };
 
@@ -318,21 +346,34 @@ const vaultLinks: ToolDef = {
       const note = resolveNote(ref);
       const links =
         direction === "in" ? (graph.incoming.get(note.path) ?? []) : (graph.out.get(note.path) ?? []);
-      return { note: note.path, direction, count: links.length, links: links.slice(0, limit) };
+      return {
+        note: note.path,
+        direction,
+        ...truncation(links.length, Math.min(links.length, limit), "links"),
+        links: links.slice(0, limit),
+      };
     }
     if (direction === "unresolved") {
       const entries = [...graph.unresolved.entries()].map(([target, sources]) => ({
         target,
         linked_from: sources,
       }));
-      return { direction, count: entries.length, unresolved: entries.slice(0, limit) };
+      return {
+        direction,
+        ...truncation(entries.length, Math.min(entries.length, limit), "unresolved targets"),
+        unresolved: entries.slice(0, limit),
+      };
     }
     const notes = getIndex().notes.filter((n) => !n.path.endsWith("Template.md"));
     const list =
       direction === "orphans"
         ? notes.filter((n) => (graph.incoming.get(n.path) ?? []).length === 0)
         : notes.filter((n) => (graph.out.get(n.path) ?? []).length === 0);
-    return { direction, count: list.length, notes: list.slice(0, limit).map((n) => n.path) };
+    return {
+      direction,
+      ...truncation(list.length, Math.min(list.length, limit), "notes"),
+      notes: list.slice(0, limit).map((n) => n.path),
+    };
   },
 };
 
