@@ -15509,6 +15509,309 @@ function assertDate(value, field) {
 var ToolError = class extends Error {
 };
 
+// src/scan.ts
+var FENCE_RE = /^\s*(```+|~~~+)/;
+var HEADING_RE = /^(#{1,6})\s+(.*?)\s*$/;
+function scanLines(content) {
+  const lines = content.split("\n");
+  const frontmatterEnd = frontmatterEndLine(lines);
+  let fence = null;
+  const out = [];
+  for (let i = 0; i < lines.length; i++) {
+    const text = lines[i];
+    if (i <= frontmatterEnd) {
+      out.push({ text, index: i, inFrontmatter: true, inFence: false, heading: null });
+      continue;
+    }
+    const fenceMatch = FENCE_RE.exec(text);
+    if (fenceMatch) {
+      const marker = fenceMatch[1][0];
+      if (fence === null) fence = marker;
+      else if (fence === marker) fence = null;
+      out.push({ text, index: i, inFrontmatter: false, inFence: true, heading: null });
+      continue;
+    }
+    if (fence !== null) {
+      out.push({ text, index: i, inFrontmatter: false, inFence: true, heading: null });
+      continue;
+    }
+    const heading = HEADING_RE.exec(text);
+    out.push({
+      text,
+      index: i,
+      inFrontmatter: false,
+      inFence: false,
+      heading: heading ? { level: heading[1].length, name: heading[2] } : null
+    });
+  }
+  return out;
+}
+function frontmatterEndLine(lines) {
+  if (lines[0]?.trim() !== "---") return -1;
+  for (let i = 1; i < lines.length; i++) {
+    if (lines[i].trim() === "---") return i;
+  }
+  return -1;
+}
+var PROTECTED_PATTERNS = [
+  /`[^`\n]*`/g,
+  // inline code
+  /\[\[[^\][\n]*\]\]/g,
+  // existing wikilinks
+  /\[[^\][\n]*\]\([^)\n]*\)/g,
+  // markdown links and images
+  /(?:https?:\/\/|www\.)[^\s)\]]+/g
+  // bare URLs
+];
+function protectedRanges(line) {
+  const ranges = [];
+  for (const pattern of PROTECTED_PATTERNS) {
+    for (const match of line.matchAll(pattern)) {
+      ranges.push({ start: match.index, end: match.index + match[0].length });
+    }
+  }
+  return merge2(ranges);
+}
+function merge2(ranges) {
+  if (ranges.length < 2) return ranges;
+  const sorted = [...ranges].sort((a, b) => a.start - b.start);
+  const out = [sorted[0]];
+  for (const range of sorted.slice(1)) {
+    const last = out[out.length - 1];
+    if (range.start <= last.end) last.end = Math.max(last.end, range.end);
+    else out.push(range);
+  }
+  return out;
+}
+function overlapsProtected(ranges, start, end) {
+  return ranges.some((r) => start < r.end && end > r.start);
+}
+function isWordBoundary(line, start, end) {
+  const before = start > 0 ? line[start - 1] : "";
+  const after = end < line.length ? line[end] : "";
+  return !isWordChar(before) && !isWordChar(after);
+}
+function isWordChar(ch) {
+  return ch !== "" && /[\p{L}\p{N}_]/u.test(ch);
+}
+
+// src/sections.ts
+function listSections(content) {
+  const lines = content.split("\n");
+  const headings = scanLines(content).filter((l) => l.heading !== null).map((l) => ({ name: l.heading.name, level: l.heading.level, line: l.index }));
+  return headings.map((h, i) => {
+    let end = lines.length;
+    for (let j = i + 1; j < headings.length; j++) {
+      if (headings[j].level <= h.level) {
+        end = headings[j].line;
+        break;
+      }
+    }
+    return { name: h.name, level: h.level, headingLine: h.line, start: h.line + 1, end };
+  });
+}
+function normalizeHeading(name) {
+  return name.replace(/^#+\s*/, "").trim();
+}
+function findSection(content, name) {
+  const target = normalizeHeading(name).toLowerCase();
+  const sections = listSections(content);
+  return sections.find((s) => s.name.toLowerCase() === target) ?? null;
+}
+function requireSection(content, name, notePath) {
+  const section = findSection(content, name);
+  if (section) return section;
+  const present = listSections(content).map((s) => s.name).join(", ");
+  throw new ToolError(
+    `section "${normalizeHeading(name)}" not found in ${notePath}; sections present: ${present || "(none)"}.`
+  );
+}
+function detectTable(content, section) {
+  const lines = content.split("\n");
+  for (let i = section.start; i < section.end - 1; i++) {
+    const header = lines[i]?.trim();
+    const divider = lines[i + 1]?.trim();
+    if (header?.startsWith("|") && divider?.startsWith("|") && /^\|[\s:|-]+\|$/.test(divider)) {
+      return { columns: splitRow(header), headerLine: i };
+    }
+  }
+  return null;
+}
+function splitRow(row) {
+  return row.trim().replace(/^\|/, "").replace(/\|$/, "").split("|").map((c) => c.trim());
+}
+function lastContentLine(lines, section) {
+  for (let i = section.end - 1; i >= section.start; i--) {
+    if (lines[i].trim() !== "") return i;
+  }
+  return -1;
+}
+function appendToSection(content, sectionName, text, options = {}) {
+  const { dedupe = true, notePath = "note" } = options;
+  const section = requireSection(content, sectionName, notePath);
+  const lines = content.split("\n");
+  const table = detectTable(content, section);
+  const payload = text.trim();
+  if (!payload) throw new ToolError("content is empty; nothing to append.");
+  let insertion;
+  if (table) {
+    insertion = toTableRow(payload, table, normalizeHeading(sectionName), notePath);
+  } else {
+    insertion = payload;
+  }
+  if (dedupe) {
+    const existing = lines.slice(section.start, section.end).map(compare);
+    if (existing.includes(compare(insertion))) {
+      return {
+        content,
+        changed: false,
+        reason: `already present in "${normalizeHeading(sectionName)}" \u2014 nothing appended`,
+        asTableRow: Boolean(table)
+      };
+    }
+  }
+  const last = lastContentLine(lines, section);
+  const insertAt = last === -1 ? section.start : last + 1;
+  const before = lines.slice(0, insertAt);
+  const after = lines.slice(insertAt);
+  const block = [];
+  if (last === -1 && before[before.length - 1]?.trim() !== "") block.push("");
+  block.push(insertion);
+  return {
+    content: [...before, ...block, ...after].join("\n"),
+    changed: true,
+    asTableRow: Boolean(table)
+  };
+}
+function compare(line) {
+  return line.trim().replace(/\s+/g, " ").toLowerCase();
+}
+function toTableRow(payload, table, sectionName, notePath) {
+  if (payload.startsWith("|")) {
+    const cells = splitRow(payload);
+    if (cells.length !== table.columns.length) {
+      throw new ToolError(
+        `section "${sectionName}" in ${notePath} is a table with ${table.columns.length} columns (${table.columns.join(
+          " | "
+        )}); the row provided has ${cells.length}. Provide exactly ${table.columns.length} cells.`
+      );
+    }
+    return `| ${cells.join(" | ")} |`;
+  }
+  throw new ToolError(
+    `section "${sectionName}" in ${notePath} is a table with columns: ${table.columns.join(
+      " | "
+    )}. Pass content as a pipe-delimited row, e.g. "| ${table.columns.map(() => "\u2026").join(" | ")} |".`
+  );
+}
+function insertSection(content, sectionName, templateOrder2 = []) {
+  const name = normalizeHeading(sectionName);
+  if (findSection(content, name)) return content;
+  const lines = content.split("\n");
+  const sections = listSections(content).filter((s) => s.level === 2);
+  const heading = `## ${name}`;
+  const orderIndex = templateOrder2.findIndex((t) => t.toLowerCase() === name.toLowerCase());
+  if (orderIndex !== -1) {
+    for (const section of sections) {
+      const pos = templateOrder2.findIndex((t) => t.toLowerCase() === section.name.toLowerCase());
+      if (pos > orderIndex) {
+        const before = lines.slice(0, section.headingLine);
+        while (before.length && before[before.length - 1].trim() === "") before.pop();
+        return [...before, "", heading, "", ...lines.slice(section.headingLine)].join("\n");
+      }
+    }
+  }
+  while (lines.length && lines[lines.length - 1].trim() === "") lines.pop();
+  return [...lines, "", heading, ""].join("\n");
+}
+
+// src/checklist.ts
+var CHECKBOX_RE = /^(\s*)- \[( |x|X)\]\s+(.*)$/;
+function parseItem(raw, line) {
+  const match = CHECKBOX_RE.exec(raw);
+  if (!match) return null;
+  const rest = match[3];
+  const split = /\s+—\s+/.exec(rest);
+  return {
+    line,
+    raw,
+    checked: match[2].toLowerCase() === "x",
+    text: (split ? rest.slice(0, split.index) : rest).trim(),
+    detail: split ? rest.slice(split.index + split[0].length).trim() : void 0
+  };
+}
+function normalizeItem(text) {
+  return text.toLowerCase().replace(/\[\[([^\]|]+)(?:\|[^\]]+)?\]\]/g, "$1").replace(/[^a-z0-9\s]/g, " ").replace(/\s+/g, " ").trim();
+}
+function setChecklistItem(content, options) {
+  const { item, detail, checked, notePath = "note" } = options;
+  const text = item.trim();
+  if (!text) throw new ToolError("item is empty; nothing to set.");
+  const lines = content.split("\n");
+  const bounds = itemBounds(content, options.section, notePath);
+  const needle = normalizeItem(text);
+  let found = null;
+  for (let i = bounds.start; i < bounds.end; i++) {
+    const parsed = parseItem(lines[i], i);
+    if (parsed && normalizeItem(parsed.text) === needle) {
+      if (!parsed.checked) {
+        found = parsed;
+        break;
+      }
+      found = found ?? parsed;
+    }
+  }
+  if (found) {
+    const nextChecked = checked ?? found.checked;
+    const nextDetail = mergeDetail(found.detail, detail);
+    const line2 = renderItem(indentOf(found.raw), nextChecked, found.text, nextDetail);
+    if (line2 === found.raw) return { content, action: "unchanged", line: line2 };
+    const next2 = [...lines];
+    next2[found.line] = line2;
+    return { content: next2.join("\n"), action: "updated", line: line2 };
+  }
+  const line = renderItem("", checked ?? false, text, detail?.trim() || void 0);
+  const insertAt = lastContentLine2(lines, bounds) + 1;
+  const next = [...lines];
+  next.splice(insertAt, 0, line);
+  return { content: next.join("\n"), action: "added", line };
+}
+function itemBounds(content, sectionName, notePath) {
+  const lines = content.split("\n");
+  if (sectionName) {
+    const section = requireSection(content, sectionName, notePath);
+    return { start: section.start, end: section.end };
+  }
+  const sections = listSections(content).filter((s) => s.level === 2);
+  if (sections.length > 0) {
+    throw new ToolError(
+      `${notePath} has sections, so section is required; sections present: ${sections.map((s) => s.name).join(", ")}.`
+    );
+  }
+  const firstHeading = listSections(content)[0];
+  return { start: firstHeading ? firstHeading.start : 0, end: lines.length };
+}
+function lastContentLine2(lines, bounds) {
+  for (let i = bounds.end - 1; i >= bounds.start; i--) {
+    if (lines[i].trim() !== "") return i;
+  }
+  return bounds.start - 1;
+}
+function indentOf(raw) {
+  return CHECKBOX_RE.exec(raw)?.[1] ?? "";
+}
+function renderItem(indent, checked, text, detail) {
+  const box = checked ? "x" : " ";
+  return `${indent}- [${box}] ${text}${detail ? ` \u2014 ${detail}` : ""}`;
+}
+function mergeDetail(existing, incoming) {
+  const next = incoming?.trim();
+  if (!next) return existing;
+  if (!existing) return next;
+  if (normalizeItem(existing).includes(normalizeItem(next))) return existing;
+  return `${existing}; ${next}`;
+}
+
 // src/frontmatter.ts
 function parseNote(content) {
   const lines = content.split("\n");
@@ -15631,6 +15934,18 @@ function asList(value) {
 import { readdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { basename, dirname, join, relative, resolve as resolve2, sep } from "node:path";
 var SKIP_DIRS = /* @__PURE__ */ new Set([".git", ".obsidian", ".trash", "node_modules", ".DS_Store"]);
+var GENERIC_NAMES = /* @__PURE__ */ new Set([
+  "overview",
+  "index",
+  "notes",
+  "note",
+  "readme",
+  "untitled",
+  "new note",
+  "misc",
+  "temp",
+  "doc"
+]);
 var index = null;
 var CACHE_MS = 3e3;
 function invalidateIndex() {
@@ -15795,17 +16110,9 @@ function writeNoteGuarded(relPath, expectedMtimeMs, content) {
 var WIKILINK_RE = /\[\[([^\][\n]+)\]\]/g;
 function extractLinks(content) {
   const targets = [];
-  let fence = null;
-  for (const line of content.split("\n")) {
-    const fenceMatch = /^\s*(```+|~~~+)/.exec(line);
-    if (fenceMatch) {
-      const marker = fenceMatch[1][0];
-      if (fence === null) fence = marker;
-      else if (fence === marker) fence = null;
-      continue;
-    }
-    if (fence !== null) continue;
-    const stripped = line.replace(/`[^`]*`/g, " ");
+  for (const line of scanLines(content)) {
+    if (line.inFence) continue;
+    const stripped = line.text.replace(/`[^`]*`/g, " ");
     for (const match of stripped.matchAll(WIKILINK_RE)) {
       const target = stripWikilink(match[1]);
       if (target) targets.push(target);
@@ -15869,148 +16176,535 @@ function searchVault(query, options = {}) {
   return { hits: hits.slice(0, limit), total: hits.length, truncated: hits.length > limit };
 }
 
-// src/sections.ts
-function listSections(content) {
-  const lines = content.split("\n");
-  const headings = [];
-  let fence = null;
-  for (let i = 0; i < lines.length; i++) {
-    const line = lines[i];
-    const fenceMatch = /^\s*(```+|~~~+)/.exec(line);
-    if (fenceMatch) {
-      const marker = fenceMatch[1][0];
-      if (fence === null) fence = marker;
-      else if (fence === marker) fence = null;
-      continue;
+// src/linkify.ts
+var LINKABLE_TYPES = /* @__PURE__ */ new Set(["project", "person", "knowledge", "moc", "idea"]);
+function isProtectedNote(note) {
+  return note.path.endsWith("Template.md") || // Tasks.md has a positional grammar: the first wikilink on a line is the
+  // task's project. Inserting a person link ahead of it would silently
+  // reassign every task it touched.
+  note.path === "Tasks.md" || // Standup.md is regenerated every morning, so any link added here is
+  // overwritten within hours — pure nightly diff churn.
+  note.path === "Standup.md";
+}
+var MIN_ENTITY_LENGTH = 4;
+var COMMON_WORDS = /* @__PURE__ */ new Set([
+  "will",
+  "video",
+  "audio",
+  "notes",
+  "note",
+  "home",
+  "work",
+  "team",
+  "data",
+  "call",
+  "calls",
+  "plan",
+  "plans",
+  "code",
+  "test",
+  "tests",
+  "time",
+  "week",
+  "year",
+  "days",
+  "food",
+  "media",
+  "money",
+  "price",
+  "sales",
+  "email",
+  "phone",
+  "house",
+  "space",
+  "board",
+  "brand",
+  "focus",
+  "goal",
+  "goals",
+  "hope",
+  "idea",
+  "ideas",
+  "list",
+  "lists",
+  "mail",
+  "main",
+  "make",
+  "mark",
+  "next",
+  "page",
+  "pages",
+  "part",
+  "post",
+  "read",
+  "room",
+  "site",
+  "type",
+  "user",
+  "users",
+  "view",
+  "well",
+  "wind",
+  "wood",
+  "word",
+  "words",
+  "grace",
+  "hope",
+  "joy",
+  "may",
+  "june",
+  "april",
+  "march",
+  "sunday",
+  "monday",
+  "friday",
+  "summer",
+  "winter",
+  "spring",
+  "autumn"
+]);
+function buildEntities(notes = getIndex().notes) {
+  const entities = [];
+  for (const note of notes) {
+    if (!note.type || !LINKABLE_TYPES.has(note.type)) continue;
+    if (note.path.endsWith("Template.md")) continue;
+    for (const phrase of [note.title, ...note.aliases]) {
+      if (eligible(phrase)) entities.push({ phrase, title: note.title, path: note.path });
     }
-    if (fence !== null) continue;
-    const heading = /^(#{1,6})\s+(.*?)\s*$/.exec(line);
-    if (heading) headings.push({ name: heading[2], level: heading[1].length, line: i });
   }
-  return headings.map((h, i) => {
-    let end = lines.length;
-    for (let j = i + 1; j < headings.length; j++) {
-      if (headings[j].level <= h.level) {
-        end = headings[j].line;
-        break;
-      }
+  return entities.sort((a, b) => b.phrase.length - a.phrase.length);
+}
+function eligible(phrase) {
+  const value = phrase.trim();
+  if (value.length < MIN_ENTITY_LENGTH) return false;
+  if (GENERIC_NAMES.has(value.toLowerCase())) return false;
+  if (/^\d/.test(value)) return false;
+  if (!/[A-Za-z]/.test(value)) return false;
+  const multiWord = /\s/.test(value);
+  if (!multiWord && COMMON_WORDS.has(value.toLowerCase())) return false;
+  if (!multiWord && /[-_]/.test(value) && value === value.toLowerCase()) return false;
+  return true;
+}
+var FILE_EXTENSION_RE = /^\.(md|markdown|txt|png|jpe?g|gif|pdf|json|ya?ml|csv|html?|tsx?|jsx?|py|sh)\b/i;
+function linkifyContent(content, notePath, entities) {
+  const scanned = scanLines(content);
+  const lines = scanned.map((l) => l.text);
+  const linked = new Set(extractLinks(content).map((t) => t.toLowerCase()));
+  const changes = [];
+  for (const entity of entities) {
+    if (entity.path === notePath) continue;
+    if (linked.has(entity.title.toLowerCase())) continue;
+    for (const line of scanned) {
+      if (line.inFrontmatter || line.inFence || line.heading) continue;
+      const text = lines[line.index];
+      const at = findMention(text, entity.phrase);
+      if (at === -1) continue;
+      const replacement = entity.phrase === entity.title ? `[[${entity.title}]]` : `[[${entity.title}|${entity.phrase}]]`;
+      const next = text.slice(0, at) + replacement + text.slice(at + entity.phrase.length);
+      lines[line.index] = next;
+      linked.add(entity.title.toLowerCase());
+      changes.push({
+        note: notePath,
+        entity: entity.title,
+        matched: entity.phrase,
+        line: line.index + 1,
+        preview: next.trim().slice(0, 200)
+      });
+      break;
     }
-    return { name: h.name, level: h.level, headingLine: h.line, start: h.line + 1, end };
-  });
+  }
+  return { changes, content: lines.join("\n") };
 }
-function normalizeHeading(name) {
-  return name.replace(/^#+\s*/, "").trim();
+function findMention(text, phrase) {
+  if (!text.includes(phrase)) return -1;
+  const ranges = protectedRanges(text);
+  let from = 0;
+  for (; ; ) {
+    const at = text.indexOf(phrase, from);
+    if (at === -1) return -1;
+    const end = at + phrase.length;
+    if (isWordBoundary(text, at, end) && !overlapsProtected(ranges, at, end) && !FILE_EXTENSION_RE.test(text.slice(end))) {
+      return at;
+    }
+    from = at + 1;
+  }
 }
-function findSection(content, name) {
-  const target = normalizeHeading(name).toLowerCase();
-  const sections = listSections(content);
-  return sections.find((s) => s.name.toLowerCase() === target) ?? null;
+function planLinkify(targets, entities) {
+  const notes = [];
+  let scanned = 0;
+  for (const note of targets) {
+    if (isProtectedNote(note)) continue;
+    scanned++;
+    const { content, mtimeMs } = readNote(note);
+    const result = linkifyContent(content, note.path, entities);
+    if (result.changes.length > 0) {
+      notes.push({ path: note.path, mtimeMs, content: result.content, changes: result.changes });
+    }
+  }
+  return { notes, scanned, entities: entities.length };
 }
-function requireSection(content, name, notePath) {
-  const section = findSection(content, name);
-  if (section) return section;
-  const present = listSections(content).map((s) => s.name).join(", ");
-  throw new ToolError(
-    `section "${normalizeHeading(name)}" not found in ${notePath}; sections present: ${present || "(none)"}.`
+
+// src/notes.ts
+import { existsSync, mkdirSync, readFileSync as readFileSync2, writeFileSync as writeFileSync2 } from "node:fs";
+import { dirname as dirname2 } from "node:path";
+var NOTE_TYPES = [
+  "project",
+  "person",
+  "meeting",
+  "daily",
+  "synthesis",
+  "knowledge",
+  "moc",
+  "shopping",
+  "idea"
+];
+var DAILY_SECTIONS = [
+  "Mood / Energy",
+  "Weather",
+  "Exercise",
+  "Media",
+  "Food",
+  "Purchases",
+  "Random Thoughts"
+];
+var SYNTHESIS_SECTIONS = ["Observations", "Changes Made Tonight", "Candidates"];
+var WIKILINK_LIST_KEYS = /* @__PURE__ */ new Set(["people", "projects"]);
+var PLAIN_LIST_KEYS = /* @__PURE__ */ new Set(["topics", "aliases", "tags"]);
+function buildNote(spec) {
+  const fields = spec.fields ?? {};
+  const created = today();
+  const date3 = spec.date ? assertDate(spec.date, "date") : created;
+  switch (spec.type) {
+    case "project": {
+      const name = requireName(spec, "project");
+      return assemble({
+        path: `Projects/${name}/${name}.md`,
+        title: name,
+        type: "project",
+        heading: name,
+        frontmatter: [
+          ["type", "project"],
+          ["status", fields.status ?? "Active"],
+          ["created", created],
+          ["started", fields.started ?? date3],
+          ["people", fields.people ?? ""],
+          ["topics", fields.topics ?? ""]
+        ],
+        sections: [
+          "Stakeholders",
+          "Key Decisions|Date,Decision,Reasoning",
+          "Conversation Log|Date,Who,Summary",
+          "Waiting On|What,Who,Since",
+          "Related Tasks",
+          "Related"
+        ],
+        fields,
+        body: spec.body
+      });
+    }
+    case "person": {
+      const name = requireName(spec, "person");
+      return assemble({
+        path: `People/${name}.md`,
+        title: name,
+        type: "person",
+        heading: name,
+        frontmatter: [
+          ["type", "person"],
+          ["role", fields.role ?? "Other"],
+          ["created", created],
+          ["projects", fields.projects ?? ""]
+        ],
+        sections: [
+          "General Notes",
+          "Conversation History|Date,Context,Summary",
+          "Pending Topics",
+          "Associated Projects"
+        ],
+        fields,
+        body: spec.body
+      });
+    }
+    case "meeting": {
+      const name = requireName(spec, "meeting");
+      const project = requireProject(spec);
+      return assemble({
+        path: `Projects/${project}/Meeting Notes/${name}.md`,
+        title: name,
+        type: "meeting",
+        heading: name,
+        frontmatter: [
+          ["type", "meeting"],
+          ["project", `"[[${project}]]"`],
+          ["date", date3],
+          ["created", created],
+          ["people", fields.people ?? ""]
+        ],
+        sections: ["Attendees", "Discussion", "Decisions", "Action Items"],
+        fields,
+        body: spec.body
+      });
+    }
+    case "daily":
+      return assemble({
+        path: `Daily/${date3}.md`,
+        title: date3,
+        type: "daily",
+        heading: `Daily Note \u2014 ${date3}`,
+        frontmatter: [
+          ["type", "daily"],
+          ["date", date3],
+          ["created", created]
+        ],
+        sections: [...DAILY_SECTIONS],
+        fields,
+        body: spec.body
+      });
+    case "synthesis":
+      return assemble({
+        path: `Syntheses/${date3}.md`,
+        title: date3,
+        type: "synthesis",
+        heading: `Synthesis \u2014 ${date3}`,
+        frontmatter: [
+          ["type", "synthesis"],
+          ["date", date3],
+          ["created", created]
+        ],
+        sections: SYNTHESIS_SECTIONS,
+        fields,
+        body: spec.body
+      });
+    case "knowledge": {
+      const name = requireName(spec, "knowledge");
+      const topic = requireTopic(spec);
+      return assemble({
+        path: `Knowledge Base/${topic}/${name}.md`,
+        title: name,
+        type: "knowledge",
+        heading: name,
+        frontmatter: [
+          ["type", "knowledge"],
+          ["topic", topic],
+          ["topics", fields.topics ?? ""],
+          ...fields.source ? [["source", fields.source]] : [],
+          ["created", created]
+        ],
+        sections: ["Summary", "Details", "Sources", "Related"],
+        fields,
+        body: spec.body
+      });
+    }
+    case "moc": {
+      const topic = requireTopic(spec);
+      const leaf = topic.split("/").pop();
+      return assemble({
+        path: `Knowledge Base/${topic}/${leaf} MOC.md`,
+        title: `${leaf} MOC`,
+        type: "moc",
+        heading: `${leaf} MOC`,
+        frontmatter: [
+          ["type", "moc"],
+          ["topic", topic],
+          ["created", created]
+        ],
+        sections: ["Overview", "Notes", "Related"],
+        fields,
+        body: spec.body
+      });
+    }
+    case "shopping": {
+      const name = requireName(spec, "shopping");
+      return assemble({
+        path: `Shopping/${name}.md`,
+        title: name,
+        type: "shopping",
+        heading: name,
+        frontmatter: [
+          ["type", "shopping"],
+          ["store", name],
+          ["created", created]
+        ],
+        // Items are plain top-level checkboxes; a store list has no sections.
+        sections: [],
+        fields,
+        body: spec.body ?? `Items to pick up next time at ${name}. Check off when bought; clear checked items periodically.`
+      });
+    }
+    case "idea": {
+      const name = requireName(spec, "idea");
+      return assemble({
+        path: `Ideas/${name}.md`,
+        title: name,
+        type: "idea",
+        heading: name,
+        frontmatter: [
+          ["type", "idea"],
+          ["status", fields.status ?? "candidate"],
+          ["created", created],
+          ["topics", fields.topics ?? ""]
+        ],
+        sections: [
+          "Concept",
+          "Target User",
+          "Problem",
+          "Wedge",
+          "Why It Might Work",
+          "Monetization Thoughts",
+          "Risks",
+          "Open Questions",
+          "Next Validation Step",
+          "Scorecard|Criterion,Score (1-5),Notes",
+          "Related"
+        ],
+        fields,
+        body: spec.body
+      });
+    }
+  }
+}
+function requireName(spec, type) {
+  const raw = (spec.name ?? "").trim();
+  if (!raw) {
+    throw new ToolError(`name is required for a ${type} note \u2014 the note is named after the thing it is about.`);
+  }
+  if (raw.includes("/") || raw.includes("\\")) {
+    throw new ToolError(
+      `name must be the plain note name, not a path; got "${raw}". The folder is derived from type.`
+    );
+  }
+  const name = raw.replace(/\.md$/i, "").trim();
+  if (GENERIC_NAMES.has(name.toLowerCase())) {
+    throw new ToolError(
+      `"${name}" is too generic to be a note name \u2014 a wikilink to it would be ambiguous. Name the note after the thing it is about, e.g. the project, person, or topic name.`
+    );
+  }
+  if (/^[^A-Za-z0-9]/.test(name)) {
+    throw new ToolError(`name must start with a letter or digit; got "${name}".`);
+  }
+  return name;
+}
+function requireProject(spec) {
+  const raw = (spec.project ?? "").trim();
+  if (!raw) throw new ToolError("project is required for a meeting note \u2014 meeting notes live inside the project folder.");
+  const note = safeFind(raw);
+  if (!note || note.type !== "project") {
+    throw new ToolError(
+      `project "${raw}" has no project note in the vault, so [[${raw}]] would not resolve. Create the project note first with note_create type="project".`
+    );
+  }
+  return note.title;
+}
+function requireTopic(spec) {
+  const raw = (spec.topic ?? spec.fields?.topic ?? "").trim().replace(/^\/+|\/+$/g, "");
+  if (!raw) {
+    throw new ToolError(
+      'topic is required for knowledge and moc notes \u2014 it is the Knowledge Base folder path, e.g. "Vehicles" or "Cycling/Repair".'
+    );
+  }
+  if (raw.startsWith("..") || raw.includes("//")) throw new ToolError(`topic "${raw}" is not a valid folder path.`);
+  return raw;
+}
+function safeFind(ref) {
+  try {
+    return findNote(ref);
+  } catch {
+    return null;
+  }
+}
+function assemble(a) {
+  const declared = new Set(a.frontmatter.map(([k]) => k));
+  const extra = Object.entries(a.fields).filter(
+    ([k]) => !declared.has(k) && k !== "description" && k !== "topic"
   );
-}
-function detectTable(content, section) {
-  const lines = content.split("\n");
-  for (let i = section.start; i < section.end - 1; i++) {
-    const header = lines[i]?.trim();
-    const divider = lines[i + 1]?.trim();
-    if (header?.startsWith("|") && divider?.startsWith("|") && /^\|[\s:|-]+\|$/.test(divider)) {
-      return { columns: splitRow(header), headerLine: i };
+  const pairs = [...a.frontmatter, ...extra];
+  const lines = ["---"];
+  for (const [key, value] of pairs) lines.push(`${key}: ${renderValue(key, value)}`);
+  lines.push("---", "", `# ${a.heading}`);
+  const description = a.fields.description?.trim();
+  if (description) lines.push("", `**Description:** ${description}`);
+  const intro = a.body?.trim();
+  if (intro) lines.push("", intro);
+  const sections = [];
+  for (const spec of a.sections) {
+    const [name, columns] = spec.split("|");
+    sections.push(name);
+    lines.push("", `## ${name}`);
+    if (columns) {
+      const cols = columns.split(",");
+      lines.push("", `| ${cols.join(" | ")} |`, `|${cols.map(() => "---").join("|")}|`);
     }
   }
-  return null;
+  return { path: a.path, title: a.title, type: a.type, sections, content: lines.join("\n") + "\n" };
 }
-function splitRow(row) {
-  return row.trim().replace(/^\|/, "").replace(/\|$/, "").split("|").map((c) => c.trim());
+function renderValue(key, value) {
+  if (value.startsWith("[") || value.startsWith('"')) return value;
+  if (WIKILINK_LIST_KEYS.has(key)) return `[${splitList(value).map(quoteLink).join(", ")}]`;
+  if (PLAIN_LIST_KEYS.has(key)) return `[${splitList(value).join(", ")}]`;
+  return value;
 }
-function lastContentLine(lines, section) {
-  for (let i = section.end - 1; i >= section.start; i--) {
-    if (lines[i].trim() !== "") return i;
-  }
-  return -1;
+function splitList(value) {
+  return value.split(",").map((v) => v.trim()).filter(Boolean);
 }
-function appendToSection(content, sectionName, text, options = {}) {
-  const { dedupe = true, notePath = "note" } = options;
-  const section = requireSection(content, sectionName, notePath);
-  const lines = content.split("\n");
-  const table = detectTable(content, section);
-  const payload = text.trim();
-  if (!payload) throw new ToolError("content is empty; nothing to append.");
-  let insertion;
-  if (table) {
-    insertion = toTableRow(payload, table, normalizeHeading(sectionName), notePath);
-  } else {
-    insertion = payload;
-  }
-  if (dedupe) {
-    const existing = lines.slice(section.start, section.end).map(compare);
-    if (existing.includes(compare(insertion))) {
+function quoteLink(value) {
+  const inner = value.replace(/^\[\[/, "").replace(/\]\]$/, "").trim();
+  return `"[[${inner}]]"`;
+}
+function createNote(spec) {
+  const note = buildNote(spec);
+  const full = absolutePath(note.path);
+  if (existsSync(full)) {
+    const existing = readFileSync2(full, "utf8");
+    if (existing.trim() !== "") {
       return {
-        content,
-        changed: false,
-        reason: `already present in "${normalizeHeading(sectionName)}" \u2014 nothing appended`,
-        asTableRow: Boolean(table)
+        created: false,
+        path: note.path,
+        title: note.title,
+        type: note.type,
+        sections: note.sections,
+        reason: `"${note.path}" already exists. Add to it with section_append instead of recreating it.`
       };
     }
   }
-  const last = lastContentLine(lines, section);
-  const insertAt = last === -1 ? section.start : last + 1;
-  const before = lines.slice(0, insertAt);
-  const after = lines.slice(insertAt);
-  const block = [];
-  if (last === -1 && before[before.length - 1]?.trim() !== "") block.push("");
-  block.push(insertion);
+  mkdirSync(dirname2(full), { recursive: true });
+  writeFileSync2(full, note.content, "utf8");
+  invalidateIndex();
   return {
-    content: [...before, ...block, ...after].join("\n"),
-    changed: true,
-    asTableRow: Boolean(table)
+    created: true,
+    path: note.path,
+    title: note.title,
+    type: note.type,
+    sections: note.sections
   };
 }
-function compare(line) {
-  return line.trim().replace(/\s+/g, " ").toLowerCase();
-}
-function toTableRow(payload, table, sectionName, notePath) {
-  if (payload.startsWith("|")) {
-    const cells = splitRow(payload);
-    if (cells.length !== table.columns.length) {
-      throw new ToolError(
-        `section "${sectionName}" in ${notePath} is a table with ${table.columns.length} columns (${table.columns.join(
-          " | "
-        )}); the row provided has ${cells.length}. Provide exactly ${table.columns.length} cells.`
-      );
-    }
-    return `| ${cells.join(" | ")} |`;
+function ensureDailyNote(date3) {
+  assertDate(date3, "date");
+  const result = createNote({ type: "daily", date: date3 });
+  if (!result.created && !existsSync(absolutePath(result.path))) {
+    throw new ToolError(`could not create ${result.path}.`);
   }
-  throw new ToolError(
-    `section "${sectionName}" in ${notePath} is a table with columns: ${table.columns.join(
-      " | "
-    )}. Pass content as a pipe-delimited row, e.g. "| ${table.columns.map(() => "\u2026").join(" | ")} |".`
-  );
+  return result;
 }
-function insertSection(content, sectionName, templateOrder2 = []) {
-  const name = normalizeHeading(sectionName);
-  if (findSection(content, name)) return content;
-  const lines = content.split("\n");
-  const sections = listSections(content).filter((s) => s.level === 2);
-  const heading = `## ${name}`;
-  const orderIndex = templateOrder2.findIndex((t) => t.toLowerCase() === name.toLowerCase());
-  if (orderIndex !== -1) {
-    for (const section of sections) {
-      const pos = templateOrder2.findIndex((t) => t.toLowerCase() === section.name.toLowerCase());
-      if (pos > orderIndex) {
-        const before = lines.slice(0, section.headingLine);
-        while (before.length && before[before.length - 1].trim() === "") before.pop();
-        return [...before, "", heading, "", ...lines.slice(section.headingLine)].join("\n");
-      }
-    }
-  }
-  while (lines.length && lines[lines.length - 1].trim() === "") lines.pop();
-  return [...lines, "", heading, ""].join("\n");
+
+// src/relate.ts
+var RELATED_SECTION = "Related";
+var RELATE_CAP = 5;
+var spent = /* @__PURE__ */ new Map();
+function relateBudgetRemaining(notePath, date3 = today()) {
+  return RELATE_CAP - (spent.get(`${date3}:${notePath}`) ?? 0);
+}
+function spendRelateBudget(notePath, date3 = today()) {
+  const key = `${date3}:${notePath}`;
+  spent.set(key, (spent.get(key) ?? 0) + 1);
+}
+function relatedTargets(content) {
+  const section = findSection(content, RELATED_SECTION);
+  if (!section) return [];
+  const body = content.split("\n").slice(section.start, section.end).join("\n");
+  return [...body.matchAll(/\[\[([^\][\n]+)\]\]/g)].map((m) => stripWikilink(m[1]));
+}
+function relatedLine(target, reason) {
+  return `- [[${target}]] \u2014 ${reason.trim()}`;
 }
 
 // src/tasks.ts
@@ -16027,14 +16721,14 @@ var MARKER_PRIORITY = {
   "\u{1F53C}": "medium",
   "\u{1F53D}": "low"
 };
-var CHECKBOX_RE = /^(\s*)- \[( |x|X)\]\s+(.*)$/;
+var CHECKBOX_RE2 = /^(\s*)- \[( |x|X)\]\s+(.*)$/;
 var DUE_RE = /📅\s*(\d{4}-\d{2}-\d{2})/;
 var DONE_RE = /✅\s*(\d{4}-\d{2}-\d{2})/;
 var WAITING_RE = /\(waiting on:\s*\[\[([^\]]+)\]\](?:\s*since\s*(\d{4}-\d{2}-\d{2}))?\)/i;
 var LINK_RE = /\[\[([^\]]+)\]\]/;
 var NOTES_RE = /\s+—\s+(.*)$/;
 function parseTaskLine(raw, line, section) {
-  const match = CHECKBOX_RE.exec(raw);
+  const match = CHECKBOX_RE2.exec(raw);
   if (!match) return null;
   let rest = match[3];
   const done = match[2].toLowerCase() === "x";
@@ -16756,15 +17450,387 @@ var vaultSnapshot = {
   },
   handler: (args) => snapshot(req(args, "label"))
 };
+var noteCreate = {
+  name: "note_create",
+  description: "Create a new note of a given type. The server derives the folder and filename from type plus name, emits the required frontmatter, and lays out the standard sections \u2014 never construct a path or write frontmatter by hand. Fill the sections afterwards with section_append. An existing note is never overwritten; the result says so and you should append instead.",
+  inputSchema: {
+    type: "object",
+    properties: {
+      type: {
+        type: "string",
+        enum: [...NOTE_TYPES],
+        description: "project -> Projects/X/X.md; person -> People/First Last.md; meeting -> the project's Meeting Notes folder; daily -> Daily/DATE.md; synthesis -> Syntheses/DATE.md; knowledge and moc -> Knowledge Base/TOPIC/; shopping -> Shopping/Store.md; idea -> Ideas/X.md."
+      },
+      name: {
+        type: "string",
+        description: "The plain name of the thing \u2014 project name, person's full name, store, idea, or knowledge note title. Not a path, not a generic name like Overview. Omit for daily and synthesis, which are named by date."
+      },
+      project: { type: "string", description: "Exact existing project name. Required for type=meeting." },
+      date: { type: "string", description: "YYYY-MM-DD. Used by daily, synthesis, and meeting. Defaults to today." },
+      topic: {
+        type: "string",
+        description: 'Knowledge Base folder path for type=knowledge or moc, e.g. "Vehicles" or "Cycling/Repair".'
+      },
+      fields: {
+        type: "object",
+        additionalProperties: { type: "string" },
+        description: 'Extra frontmatter values as a flat map of strings, e.g. {"status":"On Hold","people":"Jane Doe, Sam Lee","description":"One line"}. people and projects become quoted wikilinks; topics becomes a plain list.'
+      },
+      body: {
+        type: "string",
+        description: "Opening prose placed under the title, above the first section. The standard sections for the type are always emitted regardless."
+      }
+    },
+    required: ["type"],
+    additionalProperties: false
+  },
+  handler: (args) => {
+    const type = enumArg(args, "type", NOTE_TYPES, true);
+    const result = createNote({
+      type,
+      name: str(args, "name"),
+      project: str(args, "project"),
+      date: str(args, "date"),
+      topic: str(args, "topic"),
+      fields: flatMap(args, "fields"),
+      body: str(args, "body")
+    });
+    if (!result.created) throw new ToolError(result.reason);
+    return result;
+  }
+};
+function flatMap(args, key) {
+  const value = args[key];
+  if (value === void 0 || value === null) return void 0;
+  if (typeof value !== "object" || Array.isArray(value)) {
+    throw new ToolError(`${key} must be a flat map of string values.`);
+  }
+  const out = {};
+  for (const [k, v] of Object.entries(value)) {
+    if (v === void 0 || v === null) continue;
+    if (typeof v === "object") {
+      throw new ToolError(`${key}.${k} must be a string; nested objects and arrays are not supported.`);
+    }
+    out[k] = String(v);
+  }
+  return out;
+}
+var dailyLog = {
+  name: "daily_log",
+  description: "Add an entry to the personal daily journal, creating Daily/DATE.md from the template if it does not exist. The daily note is a diary \u2014 mood, weather, exercise, media, food, purchases, stray thoughts. Project facts, decisions, meeting notes, and follow-ups do not belong here: route those to section_append on the project note and to task_add. Feelings about a project are journal; the facts about it are not.",
+  inputSchema: {
+    type: "object",
+    properties: {
+      section: {
+        type: "string",
+        enum: [...DAILY_SECTIONS],
+        description: "Mood / Energy for mood, energy, sleep, stress. Weather for weather. Exercise for workouts, walks, sports. Media for books, shows, films, music, games, articles. Food for meals, snacks, restaurants, cooking. Purchases for things bought and notable spending. Random Thoughts for reflections, memories, and stray notes."
+      },
+      content: {
+        type: "string",
+        description: "The entry, in the user's own wording. One line or a short block."
+      },
+      date: { type: "string", description: "YYYY-MM-DD. Defaults to today in the vault's timezone." }
+    },
+    required: ["section", "content"],
+    additionalProperties: false
+  },
+  handler: (args) => {
+    const section = enumArg(args, "section", DAILY_SECTIONS, true);
+    const content = req(args, "content");
+    const date3 = str(args, "date") ? assertDate(req(args, "date"), "date") : today();
+    const daily = ensureDailyNote(date3);
+    const note = resolveNote(daily.path);
+    const current = readNote(note);
+    let working = current.content;
+    let created = false;
+    if (!findSection(working, section)) {
+      working = insertSection(working, section, [...DAILY_SECTIONS]);
+      created = true;
+    }
+    const result = appendToSection(working, section, content, { notePath: note.path });
+    if (!result.changed && !created) {
+      return { path: note.path, section, appended: false, reason: result.reason };
+    }
+    writeNoteGuarded(note.path, current.mtimeMs, result.content);
+    return {
+      path: note.path,
+      date: date3,
+      section,
+      appended: result.changed,
+      note_created: daily.created,
+      section_created: created
+    };
+  }
+};
+var checklistSet = {
+  name: "checklist_set",
+  description: "Add, update, or check off a checkbox item in a note \u2014 shopping lists, a person's Pending Topics, any `- [ ]` list. Adds the item if it is missing, merges new detail into the existing line if it is already there, and checks or unchecks it. It never removes a line. For work items with dates or priorities use task_add instead.",
+  inputSchema: {
+    type: "object",
+    properties: {
+      note: { type: "string", description: 'Note name, e.g. "Home Depot" or "Jane Doe".' },
+      item: { type: "string", description: "The item text, in the user's wording. No checkbox markers." },
+      section: {
+        type: "string",
+        description: 'Heading the item lives under, e.g. "Pending Topics". Required when the note has sections.'
+      },
+      detail: {
+        type: "string",
+        description: "Optional detail \u2014 size, brand, why. Merged into an existing line rather than duplicated."
+      },
+      checked: { type: "boolean", description: "true marks the item done, false reopens it." }
+    },
+    required: ["note", "item"],
+    additionalProperties: false
+  },
+  handler: (args) => {
+    const note = resolveNote(req(args, "note"));
+    const current = readNote(note);
+    const result = setChecklistItem(current.content, {
+      item: req(args, "item"),
+      section: str(args, "section"),
+      detail: str(args, "detail"),
+      checked: bool(args, "checked"),
+      notePath: note.path
+    });
+    if (result.action !== "unchanged") {
+      writeNoteGuarded(note.path, current.mtimeMs, result.content);
+    }
+    return { path: note.path, action: result.action, line: result.line };
+  }
+};
+var relate = {
+  name: "relate",
+  description: "Record that two notes are connected, as a line in the target note's `## Related` section. One connection per call. The reason is yours to write and is the point of the tool \u2014 a bare link with no reason is noise. Already-linked targets are skipped, so re-running is safe. Capped at " + RELATE_CAP + " new links per note per day.",
+  inputSchema: {
+    type: "object",
+    properties: {
+      note: { type: "string", description: "The note that gains the `## Related` entry." },
+      target: { type: "string", description: "The related note. Must already exist." },
+      reason: {
+        type: "string",
+        description: "One line on why they are related, in your own words. Required."
+      },
+      mirror: {
+        type: "boolean",
+        description: "Also add the reciprocal entry to the target's `## Related`. Default false."
+      }
+    },
+    required: ["note", "target", "reason"],
+    additionalProperties: false
+  },
+  handler: (args) => {
+    const note = resolveNote(req(args, "note"));
+    const target = resolveNote(req(args, "target"));
+    const reason = req(args, "reason").trim();
+    const mirror = bool(args, "mirror") ?? false;
+    if (note.path === target.path) {
+      throw new ToolError(`"${note.title}" cannot be related to itself.`);
+    }
+    if (reason.replace(/\s/g, "").length < 8) {
+      throw new ToolError(
+        `reason is too short to be useful ("${reason}"). Say in one line what connects ${note.title} and ${target.title}.`
+      );
+    }
+    const added = addRelated(note, target.title, reason);
+    const result = {
+      note: note.path,
+      target: target.title,
+      added: added.added,
+      remaining_today: relateBudgetRemaining(note.path),
+      ...added.reason ? { reason_skipped: added.reason } : {}
+    };
+    if (mirror) {
+      const back = addRelated(target, note.title, reason, { charge: false });
+      result.mirrored = back.added;
+      if (back.reason) result.mirror_skipped = back.reason;
+    }
+    return result;
+  }
+};
+function addRelated(note, target, reason, options = {}) {
+  const charge = options.charge ?? true;
+  const current = readNote(note);
+  const existing = relatedTargets(current.content).map((t) => t.toLowerCase());
+  if (existing.includes(target.toLowerCase())) {
+    return { added: false, reason: `[[${target}]] is already listed under ## ${RELATED_SECTION}` };
+  }
+  if (charge && relateBudgetRemaining(note.path) <= 0) {
+    throw new ToolError(
+      `"${note.path}" has already taken its ${RELATE_CAP} new related links today. Stop adding links to this note; keep the strongest remaining connection for tomorrow.`
+    );
+  }
+  let working = current.content;
+  if (!findSection(working, RELATED_SECTION)) {
+    working = insertSection(working, RELATED_SECTION, templateOrder(note));
+  }
+  const result = appendToSection(working, RELATED_SECTION, relatedLine(target, reason), {
+    notePath: note.path
+  });
+  writeNoteGuarded(note.path, current.mtimeMs, result.content);
+  if (charge) spendRelateBudget(note.path);
+  return { added: true };
+}
+var inboxRoute = {
+  name: "inbox_route",
+  description: "Move one line out of an inbox note into the note where it belongs. The destination is written and verified before the source line is removed, so the item can never be lost \u2014 at worst it is briefly in both places. Use task_add for items that are really tasks, then route nothing.",
+  inputSchema: {
+    type: "object",
+    properties: {
+      line: {
+        type: "string",
+        description: "Distinctive fragment of the inbox line to route. Must match exactly one line."
+      },
+      destination_note: { type: "string", description: "Note name the item belongs in." },
+      destination_section: {
+        type: "string",
+        description: "Heading in the destination to append under. Required when the destination has sections."
+      },
+      content: {
+        type: "string",
+        description: "What to write at the destination. Defaults to the inbox line's own text, preserving the user's wording."
+      },
+      source_note: {
+        type: "string",
+        description: 'Inbox to route out of. Defaults to "Inbox". Use "Knowledge Base/Inbox.md" for the KB inbox.'
+      }
+    },
+    required: ["line", "destination_note"],
+    additionalProperties: false
+  },
+  handler: (args) => {
+    const fragment = req(args, "line").trim();
+    const source = resolveNote(str(args, "source_note") ?? "Inbox.md");
+    const destination = resolveNote(req(args, "destination_note"));
+    if (source.path === destination.path) {
+      throw new ToolError(`source and destination are the same note (${source.path}).`);
+    }
+    const sourceRead = readNote(source);
+    const sourceLines = sourceRead.content.split("\n");
+    const needle = fragment.toLowerCase();
+    const matches = sourceLines.map((text, index2) => ({ text, index: index2 })).filter((l) => l.text.trim() !== "" && !l.text.trimStart().startsWith("#")).filter((l) => l.text.toLowerCase().includes(needle));
+    if (matches.length === 0) {
+      throw new ToolError(
+        `no line in ${source.path} contains "${fragment}". Read the note first to get the exact wording.`
+      );
+    }
+    if (matches.length > 1) {
+      throw new ToolError(
+        `"${fragment}" matches ${matches.length} lines in ${source.path}: ${matches.map((m) => `"${m.text.trim()}"`).join("; ")}. Pass a longer fragment.`
+      );
+    }
+    const match = matches[0];
+    const payload = str(args, "content") ?? stripListMarker(match.text);
+    const sectionName = str(args, "destination_section");
+    const destRead = readNote(destination);
+    let written;
+    if (sectionName) {
+      written = appendToSection(destRead.content, sectionName, payload, {
+        notePath: destination.path
+      }).content;
+    } else {
+      const sections = listSections(destRead.content).filter((s) => s.level === 2);
+      if (sections.length > 0) {
+        throw new ToolError(
+          `${destination.path} has sections, so destination_section is required; sections present: ${sections.map((s) => s.name).join(", ")}.`
+        );
+      }
+      written = `${destRead.content.replace(/\s*$/, "")}
+${payload}
+`;
+    }
+    writeNoteGuarded(destination.path, destRead.mtimeMs, written);
+    const verify = readNote(destination.path);
+    if (!verify.content.includes(payload.trim())) {
+      throw new ToolError(
+        `wrote to ${destination.path} but could not find the routed text afterwards; ${source.path} was left untouched.`
+      );
+    }
+    const fresh = readNote(source);
+    const freshLines = fresh.content.split("\n");
+    if (freshLines[match.index] !== match.text) {
+      throw new ToolError(
+        `the item was written to ${destination.path}, but ${source.path} changed meanwhile so the source line was left in place. Remove it on the next pass.`
+      );
+    }
+    freshLines.splice(match.index, 1);
+    writeNoteGuarded(source.path, fresh.mtimeMs, freshLines.join("\n"));
+    return {
+      routed: true,
+      from: source.path,
+      to: destination.path,
+      section: sectionName ?? null,
+      removed_line: match.text.trim(),
+      written: payload
+    };
+  }
+};
+function stripListMarker(line) {
+  return line.trim().replace(/^[-*+]\s+(\[[ xX]\]\s+)?/, "");
+}
+var linkify = {
+  name: "linkify",
+  description: "Convert plain-text mentions of existing projects, people, knowledge notes, and ideas into wikilinks. Identical words, brackets only \u2014 it adds no text and decides nothing about whether two notes are related; use relate for that. Headings, code, URLs, frontmatter, and existing links are left alone, and only the first mention in a note is linked. Run with dry_run=true first to review what it would do.",
+  inputSchema: {
+    type: "object",
+    properties: {
+      note: { type: "string", description: "Limit the pass to one note. Omit to run over the vault." },
+      since: {
+        type: "string",
+        description: "YYYY-MM-DD. Only notes modified on or after this date. Ignored when note is set."
+      },
+      dry_run: {
+        type: "boolean",
+        description: "true reports the links it would add and writes nothing. Default false."
+      },
+      limit: { type: "number", description: "Maximum changes to list in the report. Default 100." }
+    },
+    additionalProperties: false
+  },
+  handler: (args) => {
+    const ref = str(args, "note");
+    const since = str(args, "since");
+    const dryRun = bool(args, "dry_run") ?? false;
+    const limit = num(args, "limit") ?? 100;
+    let targets = ref ? [resolveNote(ref)] : getIndex().notes;
+    if (!ref && since) {
+      assertDate(since, "since");
+      const cutoff = (/* @__PURE__ */ new Date(`${since}T00:00:00`)).getTime();
+      targets = targets.filter((n) => n.mtimeMs >= cutoff);
+    }
+    const entities = buildEntities();
+    const plan = planLinkify(targets, entities);
+    const changes = plan.notes.flatMap((n) => n.changes);
+    if (!dryRun) {
+      for (const note of plan.notes) writeNoteGuarded(note.path, note.mtimeMs, note.content);
+    }
+    return {
+      dry_run: dryRun,
+      notes_scanned: plan.scanned,
+      entities_considered: plan.entities,
+      notes_changed: plan.notes.length,
+      links_added: dryRun ? 0 : changes.length,
+      ...truncation(changes.length, Math.min(changes.length, limit), "proposed links"),
+      changes: changes.slice(0, limit)
+    };
+  }
+};
 var TOOLS = [
   vaultStatus,
   vaultList,
   vaultRead,
   vaultSearch,
   vaultLinks,
+  noteCreate,
   sectionAppend,
   taskAdd,
   taskUpdate,
+  dailyLog,
+  checklistSet,
+  relate,
+  inboxRoute,
+  linkify,
   vaultSnapshot
 ];
 var TOOLS_BY_NAME = new Map(TOOLS.map((t) => [t.name, t]));

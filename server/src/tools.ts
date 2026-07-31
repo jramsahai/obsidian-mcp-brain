@@ -1,6 +1,23 @@
 import { assertDate, config, ToolError, today } from "./config.ts";
+import { setChecklistItem } from "./checklist.ts";
 import { parseNote } from "./frontmatter.ts";
+import { buildEntities, planLinkify } from "./linkify.ts";
 import { buildGraph, searchVault } from "./links.ts";
+import {
+  createNote,
+  DAILY_SECTIONS,
+  ensureDailyNote,
+  NOTE_TYPES,
+  type NoteType,
+} from "./notes.ts";
+import {
+  RELATE_CAP,
+  RELATED_SECTION,
+  relateBudgetRemaining,
+  relatedLine,
+  relatedTargets,
+  spendRelateBudget,
+} from "./relate.ts";
 import {
   appendToSection,
   findSection,
@@ -672,15 +689,444 @@ const vaultSnapshot: ToolDef = {
   handler: (args) => snapshot(req(args, "label")),
 };
 
+// ------------------------------------------------------------------- capture
+
+const noteCreate: ToolDef = {
+  name: "note_create",
+  description:
+    "Create a new note of a given type. The server derives the folder and filename from type plus name, emits the required frontmatter, and lays out the standard sections — never construct a path or write frontmatter by hand. Fill the sections afterwards with section_append. An existing note is never overwritten; the result says so and you should append instead.",
+  inputSchema: {
+    type: "object",
+    properties: {
+      type: {
+        type: "string",
+        enum: [...NOTE_TYPES],
+        description:
+          "project -> Projects/X/X.md; person -> People/First Last.md; meeting -> the project's Meeting Notes folder; daily -> Daily/DATE.md; synthesis -> Syntheses/DATE.md; knowledge and moc -> Knowledge Base/TOPIC/; shopping -> Shopping/Store.md; idea -> Ideas/X.md.",
+      },
+      name: {
+        type: "string",
+        description:
+          "The plain name of the thing — project name, person's full name, store, idea, or knowledge note title. Not a path, not a generic name like Overview. Omit for daily and synthesis, which are named by date.",
+      },
+      project: { type: "string", description: "Exact existing project name. Required for type=meeting." },
+      date: { type: "string", description: "YYYY-MM-DD. Used by daily, synthesis, and meeting. Defaults to today." },
+      topic: {
+        type: "string",
+        description:
+          'Knowledge Base folder path for type=knowledge or moc, e.g. "Vehicles" or "Cycling/Repair".',
+      },
+      fields: {
+        type: "object",
+        additionalProperties: { type: "string" },
+        description:
+          'Extra frontmatter values as a flat map of strings, e.g. {"status":"On Hold","people":"Jane Doe, Sam Lee","description":"One line"}. people and projects become quoted wikilinks; topics becomes a plain list.',
+      },
+      body: {
+        type: "string",
+        description:
+          "Opening prose placed under the title, above the first section. The standard sections for the type are always emitted regardless.",
+      },
+    },
+    required: ["type"],
+    additionalProperties: false,
+  },
+  handler: (args) => {
+    const type = enumArg(args, "type", NOTE_TYPES, true)! as NoteType;
+    const result = createNote({
+      type,
+      name: str(args, "name"),
+      project: str(args, "project"),
+      date: str(args, "date"),
+      topic: str(args, "topic"),
+      fields: flatMap(args, "fields"),
+      body: str(args, "body"),
+    });
+    if (!result.created) throw new ToolError(result.reason!);
+    return result;
+  },
+};
+
+function flatMap(args: Record<string, unknown>, key: string): Record<string, string> | undefined {
+  const value = args[key];
+  if (value === undefined || value === null) return undefined;
+  if (typeof value !== "object" || Array.isArray(value)) {
+    throw new ToolError(`${key} must be a flat map of string values.`);
+  }
+  const out: Record<string, string> = {};
+  for (const [k, v] of Object.entries(value as Record<string, unknown>)) {
+    if (v === undefined || v === null) continue;
+    if (typeof v === "object") {
+      throw new ToolError(`${key}.${k} must be a string; nested objects and arrays are not supported.`);
+    }
+    out[k] = String(v);
+  }
+  return out;
+}
+
+const dailyLog: ToolDef = {
+  name: "daily_log",
+  description:
+    "Add an entry to the personal daily journal, creating Daily/DATE.md from the template if it does not exist. The daily note is a diary — mood, weather, exercise, media, food, purchases, stray thoughts. Project facts, decisions, meeting notes, and follow-ups do not belong here: route those to section_append on the project note and to task_add. Feelings about a project are journal; the facts about it are not.",
+  inputSchema: {
+    type: "object",
+    properties: {
+      section: {
+        type: "string",
+        enum: [...DAILY_SECTIONS],
+        description:
+          "Mood / Energy for mood, energy, sleep, stress. Weather for weather. Exercise for workouts, walks, sports. Media for books, shows, films, music, games, articles. Food for meals, snacks, restaurants, cooking. Purchases for things bought and notable spending. Random Thoughts for reflections, memories, and stray notes.",
+      },
+      content: {
+        type: "string",
+        description: "The entry, in the user's own wording. One line or a short block.",
+      },
+      date: { type: "string", description: "YYYY-MM-DD. Defaults to today in the vault's timezone." },
+    },
+    required: ["section", "content"],
+    additionalProperties: false,
+  },
+  handler: (args) => {
+    const section = enumArg(args, "section", DAILY_SECTIONS, true)!;
+    const content = req(args, "content");
+    const date = str(args, "date") ? assertDate(req(args, "date"), "date") : today();
+
+    const daily = ensureDailyNote(date);
+    const note = resolveNote(daily.path);
+    const current = readNote(note);
+
+    let working = current.content;
+    let created = false;
+    if (!findSection(working, section)) {
+      working = insertSection(working, section, [...DAILY_SECTIONS]);
+      created = true;
+    }
+    const result = appendToSection(working, section, content, { notePath: note.path });
+    if (!result.changed && !created) {
+      return { path: note.path, section, appended: false, reason: result.reason };
+    }
+    writeNoteGuarded(note.path, current.mtimeMs, result.content);
+    return {
+      path: note.path,
+      date,
+      section,
+      appended: result.changed,
+      note_created: daily.created,
+      section_created: created,
+    };
+  },
+};
+
+const checklistSet: ToolDef = {
+  name: "checklist_set",
+  description:
+    "Add, update, or check off a checkbox item in a note — shopping lists, a person's Pending Topics, any `- [ ]` list. Adds the item if it is missing, merges new detail into the existing line if it is already there, and checks or unchecks it. It never removes a line. For work items with dates or priorities use task_add instead.",
+  inputSchema: {
+    type: "object",
+    properties: {
+      note: { type: "string", description: 'Note name, e.g. "Home Depot" or "Jane Doe".' },
+      item: { type: "string", description: "The item text, in the user's wording. No checkbox markers." },
+      section: {
+        type: "string",
+        description:
+          'Heading the item lives under, e.g. "Pending Topics". Required when the note has sections.',
+      },
+      detail: {
+        type: "string",
+        description: "Optional detail — size, brand, why. Merged into an existing line rather than duplicated.",
+      },
+      checked: { type: "boolean", description: "true marks the item done, false reopens it." },
+    },
+    required: ["note", "item"],
+    additionalProperties: false,
+  },
+  handler: (args) => {
+    const note = resolveNote(req(args, "note"));
+    const current = readNote(note);
+    const result = setChecklistItem(current.content, {
+      item: req(args, "item"),
+      section: str(args, "section"),
+      detail: str(args, "detail"),
+      checked: bool(args, "checked"),
+      notePath: note.path,
+    });
+    if (result.action !== "unchanged") {
+      writeNoteGuarded(note.path, current.mtimeMs, result.content);
+    }
+    return { path: note.path, action: result.action, line: result.line };
+  },
+};
+
+// -------------------------------------------------------------- machine edits
+
+const relate: ToolDef = {
+  name: "relate",
+  description:
+    "Record that two notes are connected, as a line in the target note's `## Related` section. One connection per call. The reason is yours to write and is the point of the tool — a bare link with no reason is noise. Already-linked targets are skipped, so re-running is safe. Capped at " +
+    RELATE_CAP +
+    " new links per note per day.",
+  inputSchema: {
+    type: "object",
+    properties: {
+      note: { type: "string", description: "The note that gains the `## Related` entry." },
+      target: { type: "string", description: "The related note. Must already exist." },
+      reason: {
+        type: "string",
+        description: "One line on why they are related, in your own words. Required.",
+      },
+      mirror: {
+        type: "boolean",
+        description: "Also add the reciprocal entry to the target's `## Related`. Default false.",
+      },
+    },
+    required: ["note", "target", "reason"],
+    additionalProperties: false,
+  },
+  handler: (args) => {
+    const note = resolveNote(req(args, "note"));
+    const target = resolveNote(req(args, "target"));
+    const reason = req(args, "reason").trim();
+    const mirror = bool(args, "mirror") ?? false;
+
+    if (note.path === target.path) {
+      throw new ToolError(`"${note.title}" cannot be related to itself.`);
+    }
+    if (reason.replace(/\s/g, "").length < 8) {
+      throw new ToolError(
+        `reason is too short to be useful ("${reason}"). Say in one line what connects ${note.title} and ${target.title}.`,
+      );
+    }
+
+    const added = addRelated(note, target.title, reason);
+    const result: Record<string, unknown> = {
+      note: note.path,
+      target: target.title,
+      added: added.added,
+      remaining_today: relateBudgetRemaining(note.path),
+      ...(added.reason ? { reason_skipped: added.reason } : {}),
+    };
+    if (mirror) {
+      // The mirror is the same edge seen from the other end, so it does not
+      // consume the target's own daily budget.
+      const back = addRelated(target, note.title, reason, { charge: false });
+      result.mirrored = back.added;
+      if (back.reason) result.mirror_skipped = back.reason;
+    }
+    return result;
+  },
+};
+
+function addRelated(
+  note: Note,
+  target: string,
+  reason: string,
+  options: { charge?: boolean } = {},
+): { added: boolean; reason?: string } {
+  const charge = options.charge ?? true;
+  const current = readNote(note);
+  const existing = relatedTargets(current.content).map((t) => t.toLowerCase());
+  if (existing.includes(target.toLowerCase())) {
+    return { added: false, reason: `[[${target}]] is already listed under ## ${RELATED_SECTION}` };
+  }
+  if (charge && relateBudgetRemaining(note.path) <= 0) {
+    throw new ToolError(
+      `"${note.path}" has already taken its ${RELATE_CAP} new related links today. Stop adding links to this note; keep the strongest remaining connection for tomorrow.`,
+    );
+  }
+  let working = current.content;
+  if (!findSection(working, RELATED_SECTION)) {
+    working = insertSection(working, RELATED_SECTION, templateOrder(note));
+  }
+  const result = appendToSection(working, RELATED_SECTION, relatedLine(target, reason), {
+    notePath: note.path,
+  });
+  writeNoteGuarded(note.path, current.mtimeMs, result.content);
+  if (charge) spendRelateBudget(note.path);
+  return { added: true };
+}
+
+const inboxRoute: ToolDef = {
+  name: "inbox_route",
+  description:
+    "Move one line out of an inbox note into the note where it belongs. The destination is written and verified before the source line is removed, so the item can never be lost — at worst it is briefly in both places. Use task_add for items that are really tasks, then route nothing.",
+  inputSchema: {
+    type: "object",
+    properties: {
+      line: {
+        type: "string",
+        description: "Distinctive fragment of the inbox line to route. Must match exactly one line.",
+      },
+      destination_note: { type: "string", description: "Note name the item belongs in." },
+      destination_section: {
+        type: "string",
+        description: "Heading in the destination to append under. Required when the destination has sections.",
+      },
+      content: {
+        type: "string",
+        description:
+          "What to write at the destination. Defaults to the inbox line's own text, preserving the user's wording.",
+      },
+      source_note: {
+        type: "string",
+        description: 'Inbox to route out of. Defaults to "Inbox". Use "Knowledge Base/Inbox.md" for the KB inbox.',
+      },
+    },
+    required: ["line", "destination_note"],
+    additionalProperties: false,
+  },
+  handler: (args) => {
+    const fragment = req(args, "line").trim();
+    const source = resolveNote(str(args, "source_note") ?? "Inbox.md");
+    const destination = resolveNote(req(args, "destination_note"));
+    if (source.path === destination.path) {
+      throw new ToolError(`source and destination are the same note (${source.path}).`);
+    }
+
+    const sourceRead = readNote(source);
+    const sourceLines = sourceRead.content.split("\n");
+    const needle = fragment.toLowerCase();
+    const matches = sourceLines
+      .map((text, index) => ({ text, index }))
+      .filter((l) => l.text.trim() !== "" && !l.text.trimStart().startsWith("#"))
+      .filter((l) => l.text.toLowerCase().includes(needle));
+    if (matches.length === 0) {
+      throw new ToolError(
+        `no line in ${source.path} contains "${fragment}". Read the note first to get the exact wording.`,
+      );
+    }
+    if (matches.length > 1) {
+      throw new ToolError(
+        `"${fragment}" matches ${matches.length} lines in ${source.path}: ${matches
+          .map((m) => `"${m.text.trim()}"`)
+          .join("; ")}. Pass a longer fragment.`,
+      );
+    }
+    const match = matches[0];
+    const payload = str(args, "content") ?? stripListMarker(match.text);
+
+    // 1. Write the destination.
+    const sectionName = str(args, "destination_section");
+    const destRead = readNote(destination);
+    let written: string;
+    if (sectionName) {
+      written = appendToSection(destRead.content, sectionName, payload, {
+        notePath: destination.path,
+      }).content;
+    } else {
+      const sections = listSections(destRead.content).filter((s) => s.level === 2);
+      if (sections.length > 0) {
+        throw new ToolError(
+          `${destination.path} has sections, so destination_section is required; sections present: ${sections
+            .map((s) => s.name)
+            .join(", ")}.`,
+        );
+      }
+      written = `${destRead.content.replace(/\s*$/, "")}\n${payload}\n`;
+    }
+    writeNoteGuarded(destination.path, destRead.mtimeMs, written);
+
+    // 2. Verify it landed before touching the source.
+    const verify = readNote(destination.path);
+    if (!verify.content.includes(payload.trim())) {
+      throw new ToolError(
+        `wrote to ${destination.path} but could not find the routed text afterwards; ${source.path} was left untouched.`,
+      );
+    }
+
+    // 3. Only now remove the source line.
+    const fresh = readNote(source);
+    const freshLines = fresh.content.split("\n");
+    if (freshLines[match.index] !== match.text) {
+      throw new ToolError(
+        `the item was written to ${destination.path}, but ${source.path} changed meanwhile so the source line was left in place. Remove it on the next pass.`,
+      );
+    }
+    freshLines.splice(match.index, 1);
+    writeNoteGuarded(source.path, fresh.mtimeMs, freshLines.join("\n"));
+
+    return {
+      routed: true,
+      from: source.path,
+      to: destination.path,
+      section: sectionName ?? null,
+      removed_line: match.text.trim(),
+      written: payload,
+    };
+  },
+};
+
+/** `- [ ] 2026-07-29: text` -> `2026-07-29: text`. Wording is otherwise kept. */
+function stripListMarker(line: string): string {
+  return line.trim().replace(/^[-*+]\s+(\[[ xX]\]\s+)?/, "");
+}
+
+const linkify: ToolDef = {
+  name: "linkify",
+  description:
+    "Convert plain-text mentions of existing projects, people, knowledge notes, and ideas into wikilinks. Identical words, brackets only — it adds no text and decides nothing about whether two notes are related; use relate for that. Headings, code, URLs, frontmatter, and existing links are left alone, and only the first mention in a note is linked. Run with dry_run=true first to review what it would do.",
+  inputSchema: {
+    type: "object",
+    properties: {
+      note: { type: "string", description: "Limit the pass to one note. Omit to run over the vault." },
+      since: {
+        type: "string",
+        description: "YYYY-MM-DD. Only notes modified on or after this date. Ignored when note is set.",
+      },
+      dry_run: {
+        type: "boolean",
+        description: "true reports the links it would add and writes nothing. Default false.",
+      },
+      limit: { type: "number", description: "Maximum changes to list in the report. Default 100." },
+    },
+    additionalProperties: false,
+  },
+  handler: (args) => {
+    const ref = str(args, "note");
+    const since = str(args, "since");
+    const dryRun = bool(args, "dry_run") ?? false;
+    const limit = num(args, "limit") ?? 100;
+
+    let targets = ref ? [resolveNote(ref)] : getIndex().notes;
+    if (!ref && since) {
+      assertDate(since, "since");
+      const cutoff = new Date(`${since}T00:00:00`).getTime();
+      targets = targets.filter((n) => n.mtimeMs >= cutoff);
+    }
+
+    const entities = buildEntities();
+    const plan = planLinkify(targets, entities);
+    const changes = plan.notes.flatMap((n) => n.changes);
+
+    if (!dryRun) {
+      for (const note of plan.notes) writeNoteGuarded(note.path, note.mtimeMs, note.content);
+    }
+    return {
+      dry_run: dryRun,
+      notes_scanned: plan.scanned,
+      entities_considered: plan.entities,
+      notes_changed: plan.notes.length,
+      links_added: dryRun ? 0 : changes.length,
+      ...truncation(changes.length, Math.min(changes.length, limit), "proposed links"),
+      changes: changes.slice(0, limit),
+    };
+  },
+};
+
 export const TOOLS: ToolDef[] = [
   vaultStatus,
   vaultList,
   vaultRead,
   vaultSearch,
   vaultLinks,
+  noteCreate,
   sectionAppend,
   taskAdd,
   taskUpdate,
+  dailyLog,
+  checklistSet,
+  relate,
+  inboxRoute,
+  linkify,
   vaultSnapshot,
 ];
 

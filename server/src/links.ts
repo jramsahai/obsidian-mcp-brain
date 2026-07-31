@@ -1,3 +1,4 @@
+import { scanLines } from "./scan.ts";
 import { findNote, getIndex, readNote, stripWikilink, type Note } from "./vault.ts";
 
 const WIKILINK_RE = /\[\[([^\][\n]+)\]\]/g;
@@ -9,17 +10,9 @@ const WIKILINK_RE = /\[\[([^\][\n]+)\]\]/g;
  */
 export function extractLinks(content: string): string[] {
   const targets: string[] = [];
-  let fence: string | null = null;
-  for (const line of content.split("\n")) {
-    const fenceMatch = /^\s*(```+|~~~+)/.exec(line);
-    if (fenceMatch) {
-      const marker = fenceMatch[1][0];
-      if (fence === null) fence = marker;
-      else if (fence === marker) fence = null;
-      continue;
-    }
-    if (fence !== null) continue;
-    const stripped = line.replace(/`[^`]*`/g, " ");
+  for (const line of scanLines(content)) {
+    if (line.inFence) continue;
+    const stripped = line.text.replace(/`[^`]*`/g, " ");
     for (const match of stripped.matchAll(WIKILINK_RE)) {
       const target = stripWikilink(match[1]);
       if (target) targets.push(target);

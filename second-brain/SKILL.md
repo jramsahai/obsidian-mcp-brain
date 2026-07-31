@@ -31,9 +31,15 @@ Call `obsidian__vault_status` first in any scheduled or exploratory run. It answ
 | Read a note or one of its sections | `obsidian__vault_read` |
 | Full-text search | `obsidian__vault_search` |
 | Backlinks, outgoing links, unresolved, orphans, deadends | `obsidian__vault_links` |
+| Create a new note of any kind | `obsidian__note_create` |
 | Add a line under a specific heading | `obsidian__section_append` |
 | Add a task | `obsidian__task_add` |
 | Change or complete a task | `obsidian__task_update` |
+| Log a personal journal entry | `obsidian__daily_log` |
+| Add, merge, or check off a checkbox item | `obsidian__checklist_set` |
+| Record that two notes are connected | `obsidian__relate` |
+| Move an item out of an inbox | `obsidian__inbox_route` |
+| Turn plain-text mentions into wikilinks | `obsidian__linkify` |
 | Commit the vault | `obsidian__vault_snapshot` |
 
 Two rules matter more than the rest:
@@ -41,7 +47,7 @@ Two rules matter more than the rest:
 - **Never construct a file path.** `obsidian__vault_read` takes the note name as it appears in a wikilink — `Wayfinder`, `First Last` — and resolves the path itself. Passing a path you assembled by hand is how notes end up in the wrong place.
 - **An empty result is the answer.** No search hits, an empty listing, or a missing daily note means the content does not exist. Do not re-check it another way; move on.
 
-Note bodies for brand-new notes are still written with the native file write/edit tools, directly under the vault path. Everything else — appending into an existing note, task lines, git — goes through the tools above.
+Never write a vault file with the native file write/edit tools. `obsidian__note_create` derives the path, emits the frontmatter, and lays out the sections; `obsidian__section_append` fills them in.
 
 Errors from these tools state the fix. Read the message and act on it rather than retrying the same call: a "not found" names the closest existing notes, a missing section lists the sections that exist, and a table section names its columns.
 
@@ -82,32 +88,19 @@ Naming rule: name the note after the thing so wikilinks resolve. Project note = 
 
 ## Frontmatter Standards
 
-Every note gets YAML frontmatter. Frontmatter is the queryable data model for Obsidian Bases and any future UI; wikilinks inside frontmatter also count as graph edges. Quote wikilinks in properties: `people: ["[[First Last]]"]`.
+Every note gets YAML frontmatter — it is the queryable data model for Obsidian Bases and any future UI, and wikilinks inside it count as graph edges.
 
-Shared keys on all notes: `type`, `created` (YYYY-MM-DD).
+You do not write it. `obsidian__note_create` emits the correct keys for the type you ask for, quotes wikilinks in properties, and stamps `created`. The `type` enum in its schema is the list of note kinds; its `fields` argument takes anything extra (`{"status":"On Hold","people":"Jane Doe"}`).
 
-| type | lives in | extra keys |
-|------|----------|------------|
-| `project` | `Projects/X/X.md` | `status` (Active/On Hold/Blocked/Done), `started`, `people` (wikilink list), `topics` (plain list) |
-| `meeting` | `Projects/X/Meeting Notes/` | `project` (wikilink), `date`, `people` (wikilink list) |
-| `person` | `People/` | `role`, `projects` (wikilink list) |
-| `daily` | `Daily/` | `date` |
-| `knowledge` | `Knowledge Base/` | `topic` (Topic/Subtopic), `source` (URL), `topics` (plain list) |
-| `moc` | `Knowledge Base/T/T MOC.md` | `topic` |
-| `synthesis` | `Syntheses/` | `date` |
-| `shopping` | `Shopping/` | `store` |
-| `idea` | `Ideas/` | `status` (candidate/researching/promoted/discarded), `topics` |
-| `index` | READMEs, Tasks.md, Inbox.md | — |
-
-When touching an existing note that lacks frontmatter, add it with a direct edit at the top of the file. `obsidian__section_append` never touches frontmatter.
+Existing notes that predate this and lack frontmatter are left as they are. `obsidian__section_append` never touches frontmatter.
 
 ## Writing Into Notes
 
-Use `obsidian__section_append` for anything that belongs under an existing heading — daily sections, `## Conversation History`, `## Pending Topics`, `## Related`, activity logs. It finds the section and appends at the end of it, so content cannot land after the wrong heading or at the bottom of the file. When the section holds a table it appends a table row; pass the content pipe-delimited (`| 2026-07-31 | Topic | Summary |`) and it will tell you the columns if you get it wrong.
+- **A new note of any kind** -> `obsidian__note_create`. It derives the path from type and name, so `[[Wikilinks]]` to it resolve. It refuses to overwrite a note that already has content, and refuses generic names like `Overview`.
+- **Content under an existing heading** -> `obsidian__section_append`. It appends at the end of the *named section*, so content cannot land after the wrong heading or at the bottom of the file. When the section holds a table it appends a table row; pass the content pipe-delimited (`| 2026-07-31 | Topic | Summary |`) and it names the columns if you get it wrong.
+- **A journal entry** -> `obsidian__daily_log`. **A checkbox item** -> `obsidian__checklist_set`. **A task** -> `obsidian__task_add`.
 
-Repeat calls are safe: identical content is skipped rather than duplicated.
-
-Whole new notes are written with the native file write tool at the path the naming rules above dictate.
+Repeat calls are safe everywhere: identical content is skipped rather than duplicated.
 
 ## Linking Rules (Wikilinks First)
 
@@ -132,12 +125,13 @@ Other shared rules:
 
 What automated passes (nightly consolidation, entity linking) may do to existing notes. Where a tool enforces the rule, it is named — that rule needs no vigilance from you.
 
-- Allowed inline: converting a plain-text mention of an existing person, project, or knowledge note into a wikilink — exact same words, only brackets added. Never linkify inside headings, code blocks, URLs, frontmatter values (other than the designated wikilink properties), or text already inside a link.
-- Everything else is append-only: `## Related` sections, MOC updates, synthesis notes, review-log entries. *Enforced by `obsidian__section_append`, which only ever appends.*
-- Idempotent re-runs: re-running a pass over the same notes must change nothing. *Enforced by `obsidian__section_append` deduping identical content, and by `obsidian__task_add` rejecting near-duplicate tasks.*
+- Allowed inline: converting a plain-text mention of an existing person, project, or knowledge note into a wikilink — exact same words, only brackets added. *Enforced by `obsidian__linkify`, the only tool that edits inside prose. It skips headings, code, URLs, frontmatter, and existing links, and links only the first mention per note.*
+- Everything else is append-only: `## Related` sections, MOC updates, synthesis notes, review-log entries. *Enforced by `obsidian__section_append` and `obsidian__relate`, which only ever append.*
+- Idempotent re-runs: re-running a pass over the same notes must change nothing. *Enforced by every write tool skipping content already present — `obsidian__section_append` dedupes, `obsidian__task_add` rejects near-duplicates, `obsidian__relate` skips linked targets, `obsidian__checklist_set` merges into the existing line, `obsidian__linkify` sees its own brackets.*
 - Never rewrite, reorder, or summarize user prose, especially in `Daily/` notes.
 - Never delete. Merging means all content lands in the destination. *Enforced by the tool surface: nothing exposed deletes a note.*
-- Inbox routing is the one sanctioned move: write the item to its destination first, verify, then remove the routed line from the inbox. Never remove before the destination write succeeded; never leave the item in both places.
+- Inbox routing is the one sanctioned move. *Enforced by `obsidian__inbox_route`, which writes the destination, verifies it, and only then removes the source line — so the item cannot end up nowhere.*
+- Connections between notes are the model's judgment, not the server's. `obsidian__relate` fixes the shape of a connection and caps how many one note takes in a night; deciding *which* notes are related, and writing the reason, is yours.
 - Trimming `## Review Log` entries beyond the ~20 newest is sanctioned bookkeeping, not content deletion.
 - Snapshot before and after any automated pass with `obsidian__vault_snapshot`. One reviewable commit per pass is the recovery story.
 

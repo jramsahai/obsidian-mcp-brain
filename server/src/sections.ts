@@ -1,4 +1,5 @@
 import { ToolError } from "./config.ts";
+import { scanLines } from "./scan.ts";
 
 export interface Section {
   /** Heading text without the leading `#`s, e.g. `Conversation History`. */
@@ -12,25 +13,12 @@ export interface Section {
   end: number;
 }
 
-/** All headings in a note, ignoring anything inside a fenced code block. */
+/** All headings in a note, ignoring fenced code blocks and frontmatter. */
 export function listSections(content: string): Section[] {
   const lines = content.split("\n");
-  const headings: { name: string; level: number; line: number }[] = [];
-  let fence: string | null = null;
-
-  for (let i = 0; i < lines.length; i++) {
-    const line = lines[i];
-    const fenceMatch = /^\s*(```+|~~~+)/.exec(line);
-    if (fenceMatch) {
-      const marker = fenceMatch[1][0];
-      if (fence === null) fence = marker;
-      else if (fence === marker) fence = null;
-      continue;
-    }
-    if (fence !== null) continue;
-    const heading = /^(#{1,6})\s+(.*?)\s*$/.exec(line);
-    if (heading) headings.push({ name: heading[2], level: heading[1].length, line: i });
-  }
+  const headings = scanLines(content)
+    .filter((l) => l.heading !== null)
+    .map((l) => ({ name: l.heading!.name, level: l.heading!.level, line: l.index }));
 
   return headings.map((h, i) => {
     let end = lines.length;
