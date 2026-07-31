@@ -130,6 +130,10 @@ describe("vault_links", () => {
     // Links inside code fences are not real edges.
     assert.ok(!targets.includes("Not A Real Link"));
     assert.ok(!targets.includes("Also Not A Link"));
+    // Nor are template placeholders. Counting `[[First Last]]` from
+    // Projects/Template.md put a phantom candidate in every nightly report
+    // that the user had no way to ever resolve.
+    assert.ok(!targets.includes("First Last"));
   });
 
   test("reports the true orphan count when the list is capped", () => {

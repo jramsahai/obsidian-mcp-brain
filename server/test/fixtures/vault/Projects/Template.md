@@ -11,6 +11,8 @@ topics: []
 
 ## Stakeholders
 
+- [[First Last]] — Role
+
 ## Key Decisions
 
 | Date | Decision | Reasoning |

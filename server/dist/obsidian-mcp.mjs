@@ -16120,6 +16120,9 @@ function extractLinks(content) {
   }
   return targets;
 }
+function isTemplate(note) {
+  return note.path.endsWith("Template.md");
+}
 function buildGraph() {
   const idx = getIndex();
   const out = /* @__PURE__ */ new Map();
@@ -16139,7 +16142,7 @@ function buildGraph() {
       }
       if (resolved && resolved.path !== note.path) {
         incoming.get(resolved.path)?.push(note.path);
-      } else if (!resolved) {
+      } else if (!resolved && !isTemplate(note)) {
         const list = unresolved.get(target);
         if (list) list.push(note.path);
         else unresolved.set(target, [note.path]);

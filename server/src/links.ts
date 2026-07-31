@@ -30,6 +30,10 @@ export interface Graph {
   unresolved: Map<string, string[]>;
 }
 
+function isTemplate(note: Note): boolean {
+  return note.path.endsWith("Template.md");
+}
+
 export function buildGraph(): Graph {
   const idx = getIndex();
   const out = new Map<string, string[]>();
@@ -50,7 +54,11 @@ export function buildGraph(): Graph {
       }
       if (resolved && resolved.path !== note.path) {
         incoming.get(resolved.path)?.push(note.path);
-      } else if (!resolved) {
+      } else if (!resolved && !isTemplate(note)) {
+        // A template's `[[First Last]]` and `[[Project Name]]` are placeholders,
+        // not candidate notes. Counting them made every nightly report three
+        // permanent phantoms the user could never resolve. Templates are
+        // already excluded from orphans and deadends; this closes the gap.
         const list = unresolved.get(target);
         if (list) list.push(note.path);
         else unresolved.set(target, [note.path]);
