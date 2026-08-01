@@ -94,7 +94,7 @@ This is the judgment step. For each note worth connecting:
 
 - `obsidian__vault_links direction="orphans"`: stitch each orphan into the graph via an entity link, a related entry, or a MOC — or list it in the report if it is unclear where it belongs.
 - `obsidian__vault_links direction="deadends"`: add outgoing links where honest connections exist.
-- `obsidian__vault_links direction="unresolved"`: report as candidate notes the user may want to create.
+- `obsidian__vault_links direction="unresolved"`: report as candidate notes the user may want to create. Each entry carries `times_surfaced` — how many past syntheses already proposed it. At 3 or more, stop reporting it and hand it to standup. A name that will never be a note (an OS, a card in a deck list, a passing brand) is not a candidate at all: retire it with `obsidian__link_ignore`, giving the reason in your own words.
 
 ### 7. Synthesis
 
@@ -109,7 +109,7 @@ Create the note with `obsidian__note_create type="synthesis"`, which lays out `#
 
 - **Observations** — a pattern or connection, with wikilinks to the notes involved and one line on why it matters. This is prose you write, not a template to fill.
 - **Changes Made Tonight** — counts: entity links added, related links added, inbox items routed, MOCs touched.
-- **Candidates** — unresolved names worth a note, with where they were mentioned.
+- **Candidates** — unresolved names worth a note, with where they were mentioned. Write the names as plain text, never as `[[wikilinks]]`: a bracketed candidate is a real unresolved link, so proposing one would count as fresh evidence that the user wants it.
 
 No observations and no changes -> no synthesis note. Never write "nothing happened" notes into the vault.
 
@@ -121,7 +121,7 @@ Reply to the invoking channel with a concise summary: what was routed, how many 
 
 - This job's value compounds from small, correct connections nightly — not from bulk linking. When unsure whether two notes are related, they are not.
 - Do not manufacture observations to fill the synthesis. An empty night is a fine outcome.
-- Do not re-surface the same candidate more than twice; after that, leave it to standup. Count appearances in the `## Candidates` sections of the last 3 synthesis notes — that is the candidate memory.
+- Do not re-surface a candidate whose `times_surfaced` has reached 3; standup carries it from there. The server counts for you — do not reconstruct the history by reading old synthesis notes, and do not restate a dropped candidate in the report, which is how the same twelve names survived a rule meant to retire them.
 
 ## Safety
 

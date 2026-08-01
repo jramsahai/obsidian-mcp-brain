@@ -1,8 +1,15 @@
 import { assertDate, config, localTimestamp, ToolError, today } from "./config.ts";
 import { setChecklistItem } from "./checklist.ts";
 import { parseNote } from "./frontmatter.ts";
+import {
+  ensureIgnoreList,
+  IGNORED_FILE,
+  IGNORED_SECTION,
+  ignoredRows,
+  plainText,
+} from "./ignored.ts";
 import { buildEntities, planLinkify } from "./linkify.ts";
-import { buildGraph, searchVault } from "./links.ts";
+import { buildGraph, candidateHistory, searchVault } from "./links.ts";
 import {
   createNote,
   DAILY_SECTIONS,
@@ -207,6 +214,10 @@ const vaultStatus: ToolDef = {
       last_synthesis_date: latestIn("Syntheses"),
       last_daily_date: latestIn("Daily"),
       unresolved_count: graph.unresolved.size,
+      // Retired candidates are withheld from unresolved but never from the
+      // count: a suppression the caller cannot see is a suppression it cannot
+      // audit. `vault_links direction="ignored"` lists them.
+      ignored_count: graph.ignored.size,
       orphan_count: orphans.length,
       changed_last_24h: changed,
       git_enabled: cfg.gitEnabled,
@@ -389,12 +400,12 @@ const vaultSearch: ToolDef = {
   },
 };
 
-const DIRECTIONS = ["in", "out", "unresolved", "orphans", "deadends"] as const;
+const DIRECTIONS = ["in", "out", "unresolved", "ignored", "orphans", "deadends"] as const;
 
 const vaultLinks: ToolDef = {
   name: "vault_links",
   description:
-    "Inspect the wikilink graph. direction=in gives backlinks to a note, out gives its outgoing links, unresolved lists link targets with no note, orphans lists notes nothing links to, deadends lists notes that link to nothing. note is required for in and out only.",
+    "Inspect the wikilink graph. direction=in gives backlinks to a note, out gives its outgoing links, unresolved lists link targets with no note, ignored lists targets retired via link_ignore, orphans lists notes nothing links to, deadends lists notes that link to nothing. note is required for in and out only. unresolved and ignored carry times_surfaced — how many synthesis notes have already proposed that target — so you never have to count past reports yourself.",
   inputSchema: {
     type: "object",
     properties: {
@@ -427,15 +438,22 @@ const vaultLinks: ToolDef = {
         links: links.slice(0, limit),
       };
     }
-    if (direction === "unresolved") {
-      const entries = [...graph.unresolved.entries()].map(([target, sources]) => ({
+    if (direction === "unresolved" || direction === "ignored") {
+      const source = direction === "unresolved" ? graph.unresolved : graph.ignored;
+      const surfaced = candidateHistory(source.keys());
+      const entries = [...source.entries()].map(([target, sources]) => ({
         target,
         linked_from: sources,
+        // How many synthesis notes have already proposed this. The nightly used
+        // to reconstruct this by hand and got it wrong; now it reads the number.
+        times_surfaced: surfaced.get(target) ?? 0,
       }));
+      entries.sort((a, b) => b.times_surfaced - a.times_surfaced);
       return {
         direction,
-        ...truncation(entries.length, Math.min(entries.length, limit), "unresolved targets"),
-        unresolved: entries.slice(0, limit),
+        ...truncation(entries.length, Math.min(entries.length, limit), `${direction} targets`),
+        ...(direction === "unresolved" ? { ignored_excluded: graph.ignored.size } : {}),
+        [direction]: entries.slice(0, limit),
       };
     }
     const notes = getIndex().notes.filter((n) => !isTemplate(n));
@@ -1497,6 +1515,61 @@ const inboxClear: ToolDef = {
   },
 };
 
+const linkIgnore: ToolDef = {
+  name: "link_ignore",
+  description:
+    "Retire an unresolved link target so it stops being proposed as a candidate — a name that is never going to be a note, like an operating system or a card name inside a deck description. Whether a name is worth a note is your call; the server only remembers the decision. Appending the same target twice changes nothing. Nothing is deleted: to reconsider one, the user removes its row from Ignored Links.md.",
+  inputSchema: {
+    type: "object",
+    properties: {
+      target: {
+        type: "string",
+        description: 'The unresolved link text, exactly as vault_links reports it, e.g. "Frobnix".',
+      },
+      reason: {
+        type: "string",
+        description:
+          'Why this will never be a note, in your own words, e.g. "product name quoted from a receipt, not a topic the user tracks".',
+      },
+    },
+    required: ["target", "reason"],
+    additionalProperties: false,
+  },
+  handler: (args) => {
+    const target = plainText(req(args, "target"));
+    const reason = plainText(req(args, "reason"));
+    if (!target) throw new ToolError("target is empty after stripping link brackets.");
+    if (!reason) throw new ToolError("reason is empty; say why this will never be a note.");
+
+    // Ignoring is for names with no note. A name that resolves is already
+    // answered, and retiring it would hide a real edge rather than a phantom.
+    const existing = findNoteSafe(target);
+    if (existing) {
+      throw new ToolError(
+        `"${target}" already resolves to ${existing.path}, so it is not an unresolved candidate. link_ignore is for names that will never become notes.`,
+      );
+    }
+    if (ignoredRows().some((r) => r.target.toLowerCase() === target.toLowerCase())) {
+      return { path: IGNORED_FILE, target, added: false, reason: "already ignored" };
+    }
+
+    ensureIgnoreList();
+    const note = resolveNote(IGNORED_FILE);
+    const current = readNote(note);
+    const result = appendToSection(
+      current.content,
+      IGNORED_SECTION,
+      `| ${target} | ${reason} | ${today()} |`,
+      { dedupe: true, notePath: note.path },
+    );
+    if (!result.changed) {
+      return { path: note.path, target, added: false, reason: result.reason };
+    }
+    writeNoteGuarded(note.path, current.mtimeMs, result.content);
+    return { path: note.path, target, added: true, ignored_total: ignoredRows().length };
+  },
+};
+
 export const TOOLS: ToolDef[] = [
   vaultStatus,
   vaultList,
@@ -1510,6 +1583,7 @@ export const TOOLS: ToolDef[] = [
   dailyLog,
   checklistSet,
   relate,
+  linkIgnore,
   inboxRoute,
   linkify,
   noteSetField,

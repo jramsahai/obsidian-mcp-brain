@@ -243,7 +243,7 @@ describe("skill tool references", () => {
       `obsidian__note_create type="blogpost" is not one of: project, person, meeting, doc, daily, synthesis, knowledge, moc, shopping, idea, index`,
     ]);
     assert.deepEqual(lintSkillDocument('`obsidian__vault_links direction="backlinks"`'), [
-      'obsidian__vault_links direction="backlinks" is not one of: in, out, unresolved, orphans, deadends',
+      'obsidian__vault_links direction="backlinks" is not one of: in, out, unresolved, ignored, orphans, deadends',
     ]);
   });
 

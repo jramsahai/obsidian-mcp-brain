@@ -36,7 +36,8 @@ When asked to run standup, or when invoked by cron:
 3. `obsidian__vault_list type="project" status="Active"` for the active projects, then `obsidian__vault_read` each one worth reporting on.
 4. Reconcile projects and tasks by exact project name / wikilink.
 5. `obsidian__vault_read` the latest synthesis named by step 1, if there is one.
-6. Identify the highest-signal items:
+6. `obsidian__vault_links direction="unresolved"` — the nightly hands over any candidate whose `times_surfaced` has reached 3. Those are names it has proposed repeatedly and cannot resolve on its own; surface them under **Decisions Needed** so the user can settle each one. Nothing else picks them up, so a candidate you skip here is a candidate nobody ever acts on.
+7. Identify the highest-signal items:
    - active projects and their current state
    - overdue tasks
    - tasks due in the next 3-5 days
@@ -48,8 +49,8 @@ When asked to run standup, or when invoked by cron:
    - Staleness must come from dated evidence in the notes (due dates, `since` dates, `✅` completions, Conversation Log / Waiting On dates, synthesis mentions). No dated evidence for an item -> leave it out of Stale rather than guessing.
    - pending conversations or follow-ups
    - unprocessed inbox items that look actionable
-7. `obsidian__standup_write content="…"` with the generated standup. This is the one note in the vault that is replaced rather than appended to.
-8. Reply in the current channel with the same standup, trimmed for readability.
+8. `obsidian__standup_write content="…"` with the generated standup. This is the one note in the vault that is replaced rather than appended to.
+9. Reply in the current channel with the same standup, trimmed for readability.
 
 Five or six tool calls should cover a normal standup. If you find yourself making twenty, re-read step 1 — the information is already in hand.
 
@@ -83,7 +84,10 @@ Use this structure unless the user asks for a different format:
 - Item and why it needs attention.
 
 **Overnight**
-- Notable observation or candidate from the latest synthesis, if any.
+- Notable observation from the latest synthesis, if any.
+
+**Decisions Needed**
+- Name the nightly has proposed 3+ times: create a note for it, or retire it. One line each.
 
 **Pending Conversations**
 - Person/topic and project context.

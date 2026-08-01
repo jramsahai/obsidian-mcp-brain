@@ -189,7 +189,7 @@ describe("vault_links", () => {
 
   test("rejects a direction outside the enum, listing the valid ones", () => {
     const message = callFails("vault_links", { direction: "sideways" });
-    assert.match(message, /must be one of: in, out, unresolved, orphans, deadends/);
+    assert.match(message, /must be one of: in, out, unresolved, ignored, orphans, deadends/);
   });
 });
 

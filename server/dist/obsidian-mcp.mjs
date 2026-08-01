@@ -15992,6 +15992,9 @@ function mergeDetail(existing, incoming) {
   return `${existing}; ${next}`;
 }
 
+// src/ignored.ts
+import { existsSync, writeFileSync as writeFileSync2 } from "node:fs";
+
 // src/vault.ts
 import { readdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { basename, dirname, join, relative, resolve as resolve2, sep } from "node:path";
@@ -16205,12 +16208,70 @@ function writeNoteGuarded(relPath, expectedMtimeMs, content) {
   invalidateIndex();
 }
 
+// src/ignored.ts
+var IGNORED_FILE = "Ignored Links.md";
+var IGNORED_SECTION = "Ignored";
+function plainText(value) {
+  return value.replace(/\[\[([^\][\n]+)\]\]/g, (_, inner) => inner.split("|").pop().trim()).replace(/\s+/g, " ").replace(/\|/g, "/").trim();
+}
+function initialContent(date3 = today()) {
+  return [
+    "---",
+    "type: index",
+    `created: ${date3}`,
+    "---",
+    "",
+    "# Ignored Links",
+    "",
+    "Names deliberately left uncreated \u2014 the nightly stops proposing them.",
+    "Delete a row to reconsider one; nothing here is written back by the server.",
+    "",
+    `## ${IGNORED_SECTION}`,
+    "",
+    "| Target | Reason | Since |",
+    "| --- | --- | --- |",
+    ""
+  ].join("\n");
+}
+function ensureIgnoreList() {
+  const full = absolutePath(IGNORED_FILE);
+  if (existsSync(full)) return;
+  writeFileSync2(full, initialContent(), "utf8");
+  recordWrite(IGNORED_FILE);
+  invalidateIndex();
+}
+function ignoredRows() {
+  const note = getIndex().byPath.get(IGNORED_FILE.normalize("NFC").toLowerCase());
+  if (!note) return [];
+  const { content } = readNote(note);
+  const section = findSection(content, IGNORED_SECTION);
+  if (!section) return [];
+  const table = detectTable(content, section);
+  if (!table) return [];
+  const lines = content.split("\n");
+  const rows = [];
+  for (let i = table.headerLine + 2; i < section.end; i++) {
+    const line = lines[i];
+    if (!line?.trim().startsWith("|")) continue;
+    const cells = splitRow(line);
+    const target = (cells[0] ?? "").trim();
+    if (!target) continue;
+    rows.push({ target, reason: (cells[1] ?? "").trim(), since: (cells[2] ?? "").trim() });
+  }
+  return rows;
+}
+function ignoredTargets() {
+  return new Set(ignoredRows().map((r) => r.target.toLowerCase()));
+}
+
 // src/links.ts
 var WIKILINK_RE = /\[\[([^\][\n]+)\]\]/g;
-function extractLinks(content) {
+function extractLinks(content, options = {}) {
+  const { skipLines } = options;
   const targets = [];
   for (const line of scanLines(content)) {
     if (line.inFence) continue;
+    if (skipLines?.has(line.index)) continue;
     const stripped = line.text.replace(/`[^`]*`/g, " ");
     for (const match of stripped.matchAll(WIKILINK_RE)) {
       const target = stripWikilink(match[1]);
@@ -16219,16 +16280,32 @@ function extractLinks(content) {
   }
   return targets;
 }
+var CANDIDATES_SECTION = "Candidates";
+function isSynthesis(note) {
+  return note.type === "synthesis" || note.path.startsWith("Syntheses/");
+}
+function candidateLines(note, content) {
+  if (!isSynthesis(note)) return null;
+  const section = findSection(content, CANDIDATES_SECTION);
+  if (!section) return null;
+  const lines = /* @__PURE__ */ new Set();
+  for (let i = section.start; i < section.end; i++) lines.add(i);
+  return lines;
+}
 function buildGraph() {
   const idx = getIndex();
   const out = /* @__PURE__ */ new Map();
   const incoming = /* @__PURE__ */ new Map();
   const unresolved = /* @__PURE__ */ new Map();
+  const ignored = /* @__PURE__ */ new Map();
+  const retired = ignoredTargets();
   for (const note of idx.notes) incoming.set(note.path, []);
   for (const note of idx.notes) {
     const { content } = readNote(note);
     const targets = [...new Set(extractLinks(content))];
     out.set(note.path, targets);
+    const skipLines = candidateLines(note, content);
+    const demanded = skipLines ? new Set(extractLinks(content, { skipLines })) : null;
     for (const target of targets) {
       let resolved = null;
       try {
@@ -16239,13 +16316,31 @@ function buildGraph() {
       if (resolved && resolved.path !== note.path) {
         incoming.get(resolved.path)?.push(note.path);
       } else if (!resolved && !isTemplate(note)) {
-        const list = unresolved.get(target);
+        if (note.path === IGNORED_FILE) continue;
+        if (demanded && !demanded.has(target)) continue;
+        const bucket = retired.has(target.toLowerCase()) ? ignored : unresolved;
+        const list = bucket.get(target);
         if (list) list.push(note.path);
-        else unresolved.set(target, [note.path]);
+        else bucket.set(target, [note.path]);
       }
     }
   }
-  return { out, incoming, unresolved };
+  return { out, incoming, unresolved, ignored };
+}
+function candidateHistory(targets) {
+  const wanted = [...targets];
+  const counts = new Map(wanted.map((t) => [t, 0]));
+  for (const note of getIndex().notes) {
+    if (!isSynthesis(note)) continue;
+    const { content } = readNote(note);
+    const section = findSection(content, CANDIDATES_SECTION);
+    if (!section) continue;
+    const body = content.split("\n").slice(section.start, section.end).join("\n").toLowerCase();
+    for (const target of wanted) {
+      if (body.includes(target.toLowerCase())) counts.set(target, counts.get(target) + 1);
+    }
+  }
+  return counts;
 }
 var MATCHES_PER_NOTE = 5;
 function searchVault(query, options = {}) {
@@ -16457,7 +16552,7 @@ function planLinkify(targets, entities) {
 }
 
 // src/notes.ts
-import { existsSync, mkdirSync, readFileSync as readFileSync2, writeFileSync as writeFileSync2 } from "node:fs";
+import { existsSync as existsSync2, mkdirSync, readFileSync as readFileSync2, writeFileSync as writeFileSync3 } from "node:fs";
 import { dirname as dirname2 } from "node:path";
 var NOTE_TYPES = [
   "project",
@@ -16879,7 +16974,7 @@ function setFrontmatterField(content, key, value) {
 function createNote(spec) {
   const note = buildNote(spec);
   const full = absolutePath(note.path);
-  if (existsSync(full)) {
+  if (existsSync2(full)) {
     const existing = readFileSync2(full, "utf8");
     if (existing.trim() !== "") {
       return {
@@ -16893,7 +16988,7 @@ function createNote(spec) {
     }
   }
   mkdirSync(dirname2(full), { recursive: true });
-  writeFileSync2(full, note.content, "utf8");
+  writeFileSync3(full, note.content, "utf8");
   recordWrite(note.path);
   invalidateIndex();
   return {
@@ -16907,7 +17002,7 @@ function createNote(spec) {
 function ensureDailyNote(date3) {
   assertDate(date3, "date");
   const result = createNote({ type: "daily", date: date3 });
-  if (!result.created && !existsSync(absolutePath(result.path))) {
+  if (!result.created && !existsSync2(absolutePath(result.path))) {
     throw new ToolError(`could not create ${result.path}.`);
   }
   return result;
@@ -17268,6 +17363,10 @@ var vaultStatus = {
       last_synthesis_date: latestIn("Syntheses"),
       last_daily_date: latestIn("Daily"),
       unresolved_count: graph.unresolved.size,
+      // Retired candidates are withheld from unresolved but never from the
+      // count: a suppression the caller cannot see is a suppression it cannot
+      // audit. `vault_links direction="ignored"` lists them.
+      ignored_count: graph.ignored.size,
       orphan_count: orphans.length,
       changed_last_24h: changed,
       git_enabled: cfg.gitEnabled,
@@ -17428,10 +17527,10 @@ var vaultSearch = {
     };
   }
 };
-var DIRECTIONS = ["in", "out", "unresolved", "orphans", "deadends"];
+var DIRECTIONS = ["in", "out", "unresolved", "ignored", "orphans", "deadends"];
 var vaultLinks = {
   name: "vault_links",
-  description: "Inspect the wikilink graph. direction=in gives backlinks to a note, out gives its outgoing links, unresolved lists link targets with no note, orphans lists notes nothing links to, deadends lists notes that link to nothing. note is required for in and out only.",
+  description: "Inspect the wikilink graph. direction=in gives backlinks to a note, out gives its outgoing links, unresolved lists link targets with no note, ignored lists targets retired via link_ignore, orphans lists notes nothing links to, deadends lists notes that link to nothing. note is required for in and out only. unresolved and ignored carry times_surfaced \u2014 how many synthesis notes have already proposed that target \u2014 so you never have to count past reports yourself.",
   inputSchema: {
     type: "object",
     properties: {
@@ -17462,15 +17561,22 @@ var vaultLinks = {
         links: links.slice(0, limit)
       };
     }
-    if (direction === "unresolved") {
-      const entries = [...graph.unresolved.entries()].map(([target, sources]) => ({
+    if (direction === "unresolved" || direction === "ignored") {
+      const source = direction === "unresolved" ? graph.unresolved : graph.ignored;
+      const surfaced = candidateHistory(source.keys());
+      const entries = [...source.entries()].map(([target, sources]) => ({
         target,
-        linked_from: sources
+        linked_from: sources,
+        // How many synthesis notes have already proposed this. The nightly used
+        // to reconstruct this by hand and got it wrong; now it reads the number.
+        times_surfaced: surfaced.get(target) ?? 0
       }));
+      entries.sort((a, b) => b.times_surfaced - a.times_surfaced);
       return {
         direction,
-        ...truncation(entries.length, Math.min(entries.length, limit), "unresolved targets"),
-        unresolved: entries.slice(0, limit)
+        ...truncation(entries.length, Math.min(entries.length, limit), `${direction} targets`),
+        ...direction === "unresolved" ? { ignored_excluded: graph.ignored.size } : {},
+        [direction]: entries.slice(0, limit)
       };
     }
     const notes = getIndex().notes.filter((n) => !isTemplate(n));
@@ -18376,6 +18482,54 @@ var inboxClear = {
     };
   }
 };
+var linkIgnore = {
+  name: "link_ignore",
+  description: "Retire an unresolved link target so it stops being proposed as a candidate \u2014 a name that is never going to be a note, like an operating system or a card name inside a deck description. Whether a name is worth a note is your call; the server only remembers the decision. Appending the same target twice changes nothing. Nothing is deleted: to reconsider one, the user removes its row from Ignored Links.md.",
+  inputSchema: {
+    type: "object",
+    properties: {
+      target: {
+        type: "string",
+        description: 'The unresolved link text, exactly as vault_links reports it, e.g. "Frobnix".'
+      },
+      reason: {
+        type: "string",
+        description: 'Why this will never be a note, in your own words, e.g. "product name quoted from a receipt, not a topic the user tracks".'
+      }
+    },
+    required: ["target", "reason"],
+    additionalProperties: false
+  },
+  handler: (args) => {
+    const target = plainText(req(args, "target"));
+    const reason = plainText(req(args, "reason"));
+    if (!target) throw new ToolError("target is empty after stripping link brackets.");
+    if (!reason) throw new ToolError("reason is empty; say why this will never be a note.");
+    const existing = findNoteSafe(target);
+    if (existing) {
+      throw new ToolError(
+        `"${target}" already resolves to ${existing.path}, so it is not an unresolved candidate. link_ignore is for names that will never become notes.`
+      );
+    }
+    if (ignoredRows().some((r) => r.target.toLowerCase() === target.toLowerCase())) {
+      return { path: IGNORED_FILE, target, added: false, reason: "already ignored" };
+    }
+    ensureIgnoreList();
+    const note = resolveNote(IGNORED_FILE);
+    const current = readNote(note);
+    const result = appendToSection(
+      current.content,
+      IGNORED_SECTION,
+      `| ${target} | ${reason} | ${today()} |`,
+      { dedupe: true, notePath: note.path }
+    );
+    if (!result.changed) {
+      return { path: note.path, target, added: false, reason: result.reason };
+    }
+    writeNoteGuarded(note.path, current.mtimeMs, result.content);
+    return { path: note.path, target, added: true, ignored_total: ignoredRows().length };
+  }
+};
 var TOOLS = [
   vaultStatus,
   vaultList,
@@ -18389,6 +18543,7 @@ var TOOLS = [
   dailyLog,
   checklistSet,
   relate,
+  linkIgnore,
   inboxRoute,
   linkify,
   noteSetField,
