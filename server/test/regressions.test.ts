@@ -405,11 +405,13 @@ describe("section targeting", () => {
         keep_newest: 2,
       });
     }
-    const content = read(root, "Knowledge Base/README.md");
-    assert.ok(!content.includes("2026-08-01"), "the oldest entry should have been dropped");
-    assert.ok(!content.includes("2026-08-02"));
-    assert.match(content, /2026-08-03/);
-    assert.match(content, /2026-08-04/);
+    // Assert on the entries themselves, not on the whole file: the note's own
+    // `created:` frontmatter carries today's date, so a substring search over
+    // the file reports the oldest entry as still present on four days a year.
+    const entries = read(root, "Knowledge Base/README.md")
+      .split("\n")
+      .filter((line) => line.startsWith("- 2026-08-"));
+    assert.deepEqual(entries, ["- 2026-08-03: reviewed", "- 2026-08-04: reviewed"]);
   });
 });
 
