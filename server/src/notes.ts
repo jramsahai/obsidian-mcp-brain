@@ -254,9 +254,10 @@ export function buildNote(spec: CreateSpec): CreatedNote {
       });
     }
     case "index": {
-      // A folder's own README. The vault already uses `type: index` for
-      // Inbox.md and Standup.md; without a way to create one, the Knowledge
-      // Base review log had no file to live in and was silently never written.
+      // A folder's own README. The vault uses `type: index` for its structural
+      // notes — README.md, Tasks.md, and the inboxes; without a way to create
+      // one, the Knowledge Base review log had no file to live in and was
+      // silently never written.
       const folder = requireName(spec, "index");
       return assemble({
         path: `${folder}/README.md`,
