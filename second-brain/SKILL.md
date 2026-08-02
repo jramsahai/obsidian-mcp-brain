@@ -108,7 +108,9 @@ Existing notes that predate this and lack frontmatter are left as they are. `obs
 - **A dated entry in a running log** -> `obsidian__log_append`. A project note's `## Activity Log` and an index note's `## Review Log` are built from `### YYYY-MM-DD` blocks; it writes that heading for you, keeps the newest date at the top, and merges a same-day second entry into that day's block. Pass the entry text only. `obsidian__section_append` on such a section drops a bare line above the first date heading, which is not an entry and is not where a reader looks.
 - **A journal entry** -> `obsidian__daily_log`. **A checkbox item** -> `obsidian__checklist_set`. **A task** -> `obsidian__task_add`.
 
-Repeat calls are safe everywhere: identical content is skipped rather than duplicated.
+Repeat calls are safe: identical content is skipped, and in a dated log block or a table a *reworded* repeat is refused too, quoting the entry it resembles.
+
+Treat that refusal as information about yourself, not an obstacle. It means you already wrote this earlier in the turn — the write landed, and the reply you have not sent yet is the only thing still missing. Rewording and retrying is what produced three copies of one board purchase and two of one conversation on 2026-08-02. `allow_similar=true` is for a genuinely separate event that reads alike; `obsidian__log_remove` is how a mistaken entry comes back out, so no vault fix ever needs a direct file edit.
 
 ## Linking Rules (Wikilinks First)
 

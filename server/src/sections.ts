@@ -1,5 +1,6 @@
 import { isDate, ToolError } from "./config.ts";
 import { scanLines } from "./scan.ts";
+import { excerpt, findSimilar } from "./similar.ts";
 
 export interface Section {
   /** Heading text without the leading `#`s, e.g. `Conversation History`. */
@@ -151,9 +152,9 @@ export function appendToSection(
   content: string,
   sectionName: string,
   text: string,
-  options: { dedupe?: boolean; notePath?: string; keepNewest?: number } = {},
+  options: { dedupe?: boolean; notePath?: string; keepNewest?: number; allowSimilar?: boolean } = {},
 ): AppendResult {
-  const { dedupe = true, notePath = "note", keepNewest } = options;
+  const { dedupe = true, notePath = "note", keepNewest, allowSimilar = false } = options;
   const section = requireSection(content, sectionName, notePath);
   const lines = content.split("\n");
   const table = detectTable(content, section);
@@ -168,14 +169,24 @@ export function appendToSection(
   }
 
   if (dedupe) {
-    const existing = lines.slice(section.start, section.end).map(compare);
-    if (existing.includes(compare(insertion))) {
+    const body = lines.slice(section.start, section.end);
+    if (body.map(compare).includes(compare(insertion))) {
       return {
         content,
         changed: false,
         reason: `already present in "${normalizeHeading(sectionName)}" — nothing appended`,
         asTableRow: Boolean(table),
       };
+    }
+    // Only tables. A table row has a shape — a key cell and a fixed number of
+    // fields — and across the vault's 4007 co-located rows the near-duplicate
+    // guard rejects none of them. Free bullets have no shape, and the same
+    // guard over the vault's 44949 co-located bullets would reject 79 real
+    // ones: repeated file paths, checklist items, research lines differing by a
+    // percentage. Those are a section_append caller's normal output, so
+    // guarding them would cost more writes than it saved.
+    if (!allowSimilar && table) {
+      assertNotSimilar(insertion, body, `"${normalizeHeading(sectionName)}"`, notePath);
     }
   }
 
@@ -332,9 +343,9 @@ export function appendDatedEntry(
   sectionName: string,
   date: string,
   text: string,
-  options: { dedupe?: boolean; notePath?: string; keepNewest?: number } = {},
+  options: { dedupe?: boolean; notePath?: string; keepNewest?: number; allowSimilar?: boolean } = {},
 ): DatedAppendResult {
-  const { dedupe = true, notePath = "note", keepNewest } = options;
+  const { dedupe = true, notePath = "note", keepNewest, allowSimilar = false } = options;
   const section = requireSection(content, sectionName, notePath);
   const name = normalizeHeading(sectionName);
 
@@ -357,8 +368,14 @@ export function appendDatedEntry(
 
   if (existing) {
     const bodyStart = existing.headingLine + 1;
-    const seen = new Set(lines.slice(bodyStart, existing.end).map(compare));
+    const body = lines.slice(bodyStart, existing.end);
+    const seen = new Set(body.map(compare));
     const fresh = dedupe ? entry.filter((l) => l.trim() === "" || !seen.has(compare(l))) : entry;
+    if (dedupe && !allowSimilar) {
+      for (const line of fresh) {
+        if (line.trim()) assertNotSimilar(line, body, `"### ${date}" in "${name}"`, notePath);
+      }
+    }
     if (!fresh.some((l) => l.trim() !== "")) {
       return {
         content,
@@ -400,6 +417,76 @@ export function appendDatedEntry(
     next.push("", ...rest.slice(i));
   }
   return settle(next, sectionName, keepNewest, true);
+}
+
+export interface RemoveResult {
+  content: string;
+  /** The entry lines removed, in document order. */
+  removed: string[];
+}
+
+/**
+ * Remove entries from one `### YYYY-MM-DD` block by substring match.
+ *
+ * The only deletion in the tool surface, and it exists because its absence was
+ * itself a hazard: an append-only server has no way to undo an append, so the
+ * 2026-08-02 cleanup of duplicate entries was done with openclaw's native `edit`
+ * tool writing straight into the vault — outside every guard here, and outside
+ * the one-reviewable-commit discipline. Scoped to a single dated block, matching
+ * on a caller-supplied substring, so it can never become a general file edit.
+ */
+export function removeDatedEntries(
+  content: string,
+  sectionName: string,
+  date: string,
+  match: string,
+  options: { notePath?: string } = {},
+): RemoveResult {
+  const { notePath = "note" } = options;
+  const needle = match.trim();
+  if (!needle) throw new ToolError("match is empty; nothing would be removed.");
+  const section = requireSection(content, sectionName, notePath);
+  const name = normalizeHeading(sectionName);
+  const block = dateBlocks(content, section).find((b) => b.date === date);
+  if (!block) {
+    throw new ToolError(
+      `no "### ${date}" block in "${name}" of ${notePath}. Dates present: ${
+        dateBlocks(content, section)
+          .map((b) => b.date)
+          .join(", ") || "none"
+      }.`,
+    );
+  }
+
+  const lines = content.split("\n");
+  const needleCmp = compare(needle);
+  const drop = new Set<number>();
+  for (let i = block.headingLine + 1; i < block.end; i++) {
+    if (lines[i].trim() && compare(lines[i]).includes(needleCmp)) drop.add(i);
+  }
+  if (!drop.size) {
+    throw new ToolError(
+      `no entry under "### ${date}" in "${name}" of ${notePath} contains "${excerpt(needle)}". Nothing was removed.`,
+    );
+  }
+
+  const removed = [...drop].sort((a, b) => a - b).map((i) => lines[i].trim());
+  let out = lines.filter((_, i) => !drop.has(i));
+
+  // A block emptied of every entry is a bare date heading claiming a day that
+  // now has no history — drop the heading with it.
+  const after = out.join("\n");
+  const stillThere = findSection(after, sectionName);
+  const emptied =
+    stillThere &&
+    dateBlocks(after, stillThere)
+      .filter((b) => b.date === date)
+      .find((b) => !out.slice(b.headingLine + 1, b.end).some((l) => l.trim()));
+  if (emptied) out = out.filter((_, i) => i < emptied.headingLine || i >= emptied.end);
+
+  while (out.length > 1 && out[out.length - 1] === "" && out[out.length - 2].trim() === "") out.pop();
+  if (out[out.length - 1] !== "") out.push("");
+  return { content: out.join("\n"), removed };
 }
 
 function settle(
@@ -456,6 +543,23 @@ function trimDatedLog(
 
 function compare(line: string): string {
   return line.trim().replace(/\s+/g, " ").toLowerCase();
+}
+
+/**
+ * An error, not a silent skip. A silent skip would report `appended: false` and
+ * let a model that has lost track of its own turn keep going; the 2026-08-02
+ * turn re-read the note, saw its own entry, and appended a third wording anyway.
+ * Naming the entry it collides with is what stops that loop, and `allow_similar`
+ * exists so a genuinely close entry is still one argument away.
+ */
+function assertNotSimilar(line: string, body: readonly string[], where: string, notePath: string) {
+  const match = findSimilar(line, body);
+  if (!match) return;
+  throw new ToolError(
+    `entry is too similar (${match.score.toFixed(2)}) to one already in ${where} of ${notePath}: "${excerpt(
+      match.text,
+    )}". If you already logged this in an earlier step, it is recorded — do not write it again. Pass allow_similar=true only if this is genuinely a separate event.`,
+  );
 }
 
 function toTableRow(

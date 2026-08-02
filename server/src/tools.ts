@@ -35,6 +35,7 @@ import {
   isDatedLog,
   listSections,
   normalizeHeading,
+  removeDatedEntries,
   requireSection,
 } from "./sections.ts";
 import {
@@ -491,6 +492,11 @@ const sectionAppend: ToolDef = {
         type: "boolean",
         description: "Skip the append if identical content already exists in the section. Default true.",
       },
+      allow_similar: {
+        type: "boolean",
+        description:
+          "Append even when the content closely resembles something already in the section. Default false, which rejects the write and names what it resembles. Set this only for a genuinely separate entry that happens to read alike.",
+      },
       create_section: {
         type: "boolean",
         description: "Create the section if it does not exist, in template position. Default false.",
@@ -544,6 +550,7 @@ const sectionAppend: ToolDef = {
     const result = appendToSection(working, sectionName, content, {
       dedupe,
       keepNewest,
+      allowSimilar: bool(args, "allow_similar") ?? false,
       notePath: note.path,
     });
     if (!result.changed && !created) {
@@ -587,6 +594,11 @@ const logAppend: ToolDef = {
         type: "boolean",
         description: "Skip lines already present in that day's block. Default true.",
       },
+      allow_similar: {
+        type: "boolean",
+        description:
+          "Write the entry even when it closely resembles one already in that day's block. Default false, which rejects the write and names the entry it resembles. Set this only for a genuinely separate event that happens to read alike — not to get past the error after re-deciding to log something you already logged.",
+      },
       create_section: {
         type: "boolean",
         description: "Create the log section if it does not exist, in template position. Default false.",
@@ -627,6 +639,7 @@ const logAppend: ToolDef = {
     const result = appendDatedEntry(working, sectionName, date, content, {
       dedupe,
       keepNewest,
+      allowSimilar: bool(args, "allow_similar") ?? false,
       notePath: note.path,
     });
     // `created` is tracked separately so a deduped entry cannot swallow a
@@ -644,6 +657,47 @@ const logAppend: ToolDef = {
       section_created: created,
       blocks: result.blocks,
       dropped: result.dropped,
+    };
+  },
+};
+
+const logRemove: ToolDef = {
+  name: "log_remove",
+  description:
+    "Remove one or more entries from a single \"### YYYY-MM-DD\" block of a log section, matching on a substring of the entry text. The only tool here that deletes anything, and it exists for one job: undoing an entry this system wrote by mistake — a duplicate, or a wrong date — without dropping to a file edit. It is not for editing history the user wrote; if an entry is merely out of date, add a new entry saying so instead. Removing every entry in a block removes the now-empty date heading too.",
+  inputSchema: {
+    type: "object",
+    properties: {
+      note: { type: "string", description: "Note name or vault-relative path." },
+      section: { type: "string", description: 'The log heading, e.g. "Activity Log".' },
+      date: {
+        type: "string",
+        description: "YYYY-MM-DD of the block to remove from. Only this block is touched.",
+      },
+      match: {
+        type: "string",
+        description:
+          "Substring of the entry to remove, matched case-insensitively. Every entry in that block containing it is removed, so pass enough text to identify the one you mean.",
+      },
+    },
+    required: ["note", "section", "date", "match"],
+    additionalProperties: false,
+  },
+  handler: (args) => {
+    const sectionName = normalizeHeading(req(args, "section"));
+    const date = assertDate(req(args, "date"), "date");
+    const note = resolveWritable(req(args, "note"));
+    const current = readNote(note);
+    const result = removeDatedEntries(current.content, sectionName, date, req(args, "match"), {
+      notePath: note.path,
+    });
+    writeNoteGuarded(note.path, current.mtimeMs, result.content);
+    return {
+      path: note.path,
+      section: sectionName,
+      date,
+      removed: result.removed.length,
+      entries: result.removed,
     };
   },
 };
@@ -1681,6 +1735,7 @@ export const TOOLS: ToolDef[] = [
   noteCreate,
   sectionAppend,
   logAppend,
+  logRemove,
   taskAdd,
   taskUpdate,
   dailyLog,

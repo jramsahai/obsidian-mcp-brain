@@ -15753,6 +15753,63 @@ function isWordChar(ch) {
   return ch !== "" && /[\p{L}\p{N}_]/u.test(ch);
 }
 
+// src/similar.ts
+var SIMILARITY_THRESHOLD = 0.65;
+var MIN_TOKENS = 4;
+var STOP = new Set(
+  "the a an and or of to for in on at is are was were be been being it its this that these those with from as by we i he she they them our their his her".split(
+    " "
+  )
+);
+function contentTokens(text) {
+  const words = text.replace(/\[\[([^\]|]+)(?:\|([^\]]+))?\]\]/g, (_, target, alias) => alias ?? target).replace(/https?:\/\/\S+/g, " ").toLowerCase().replace(/[^a-z0-9\s]/g, " ").split(/\s+/).filter((w) => w && !STOP.has(w));
+  return new Set(words);
+}
+function matchAll(text, re, group = 0) {
+  return new Set([...text.matchAll(re)].map((m) => m[group].toLowerCase()));
+}
+function differs(a, b) {
+  if (!a.size || !b.size) return false;
+  if (a.size !== b.size) return true;
+  for (const t of a) if (!b.has(t)) return true;
+  return false;
+}
+function rowKey(line) {
+  const trimmed = line.trim();
+  if (!trimmed.startsWith("|")) return null;
+  const first = trimmed.slice(1).split("|")[0]?.trim().toLowerCase();
+  return first || null;
+}
+function differentSubjects(a, b) {
+  const DATE = /\d{4}-\d{2}-\d{2}/g;
+  const LINK = /\[\[([^\]|]+)(?:\|[^\]]+)?\]\]/g;
+  const [keyA, keyB] = [rowKey(a), rowKey(b)];
+  if (keyA && keyB && keyA !== keyB) return true;
+  return differs(matchAll(a, DATE), matchAll(b, DATE)) || differs(matchAll(a, LINK, 1), matchAll(b, LINK, 1));
+}
+function similarity(a, b) {
+  if (differentSubjects(a, b)) return 0;
+  const A = contentTokens(a);
+  const B = contentTokens(b);
+  if (A.size < MIN_TOKENS || B.size < MIN_TOKENS) return 0;
+  let shared = 0;
+  for (const t of A) if (B.has(t)) shared++;
+  return 2 * shared / (A.size + B.size);
+}
+function findSimilar(line, existing, threshold = SIMILARITY_THRESHOLD) {
+  let best = null;
+  for (const candidate of existing) {
+    if (!candidate.trim()) continue;
+    const score = similarity(line, candidate);
+    if (score >= threshold && (!best || score > best.score)) best = { text: candidate, score };
+  }
+  return best;
+}
+function excerpt(line, max = 90) {
+  const flat = line.trim().replace(/^[-*+]\s+/, "").replace(/\s+/g, " ");
+  return flat.length <= max ? flat : `${flat.slice(0, max - 1)}\u2026`;
+}
+
 // src/sections.ts
 function listSections(content) {
   const lines = content.split("\n");
@@ -15822,7 +15879,7 @@ function tableEnd(lines, table, limit) {
   return i;
 }
 function appendToSection(content, sectionName, text, options = {}) {
-  const { dedupe = true, notePath = "note", keepNewest } = options;
+  const { dedupe = true, notePath = "note", keepNewest, allowSimilar = false } = options;
   const section = requireSection(content, sectionName, notePath);
   const lines = content.split("\n");
   const table = detectTable(content, section);
@@ -15835,14 +15892,17 @@ function appendToSection(content, sectionName, text, options = {}) {
     insertion = payload;
   }
   if (dedupe) {
-    const existing = lines.slice(section.start, section.end).map(compare);
-    if (existing.includes(compare(insertion))) {
+    const body = lines.slice(section.start, section.end);
+    if (body.map(compare).includes(compare(insertion))) {
       return {
         content,
         changed: false,
         reason: `already present in "${normalizeHeading(sectionName)}" \u2014 nothing appended`,
         asTableRow: Boolean(table)
       };
+    }
+    if (!allowSimilar && table) {
+      assertNotSimilar(insertion, body, `"${normalizeHeading(sectionName)}"`, notePath);
     }
   }
   const bodyEnd = ownContentEnd(content, section);
@@ -15909,7 +15969,7 @@ function entryLines(text, sectionName, notePath) {
   });
 }
 function appendDatedEntry(content, sectionName, date3, text, options = {}) {
-  const { dedupe = true, notePath = "note", keepNewest } = options;
+  const { dedupe = true, notePath = "note", keepNewest, allowSimilar = false } = options;
   const section = requireSection(content, sectionName, notePath);
   const name = normalizeHeading(sectionName);
   const table = detectTable(content, { ...section, end: ownContentEnd(content, section) });
@@ -15926,8 +15986,14 @@ function appendDatedEntry(content, sectionName, date3, text, options = {}) {
   const existing = blocks.find((b) => b.date === date3);
   if (existing) {
     const bodyStart = existing.headingLine + 1;
-    const seen = new Set(lines.slice(bodyStart, existing.end).map(compare));
+    const body = lines.slice(bodyStart, existing.end);
+    const seen = new Set(body.map(compare));
     const fresh = dedupe ? entry.filter((l) => l.trim() === "" || !seen.has(compare(l))) : entry;
+    if (dedupe && !allowSimilar) {
+      for (const line of fresh) {
+        if (line.trim()) assertNotSimilar(line, body, `"### ${date3}" in "${name}"`, notePath);
+      }
+    }
     if (!fresh.some((l) => l.trim() !== "")) {
       return {
         content,
@@ -15959,6 +16025,39 @@ function appendDatedEntry(content, sectionName, date3, text, options = {}) {
     next.push("", ...rest.slice(i));
   }
   return settle(next, sectionName, keepNewest, true);
+}
+function removeDatedEntries(content, sectionName, date3, match, options = {}) {
+  const { notePath = "note" } = options;
+  const needle = match.trim();
+  if (!needle) throw new ToolError("match is empty; nothing would be removed.");
+  const section = requireSection(content, sectionName, notePath);
+  const name = normalizeHeading(sectionName);
+  const block = dateBlocks(content, section).find((b) => b.date === date3);
+  if (!block) {
+    throw new ToolError(
+      `no "### ${date3}" block in "${name}" of ${notePath}. Dates present: ${dateBlocks(content, section).map((b) => b.date).join(", ") || "none"}.`
+    );
+  }
+  const lines = content.split("\n");
+  const needleCmp = compare(needle);
+  const drop = /* @__PURE__ */ new Set();
+  for (let i = block.headingLine + 1; i < block.end; i++) {
+    if (lines[i].trim() && compare(lines[i]).includes(needleCmp)) drop.add(i);
+  }
+  if (!drop.size) {
+    throw new ToolError(
+      `no entry under "### ${date3}" in "${name}" of ${notePath} contains "${excerpt(needle)}". Nothing was removed.`
+    );
+  }
+  const removed = [...drop].sort((a, b) => a - b).map((i) => lines[i].trim());
+  let out = lines.filter((_, i) => !drop.has(i));
+  const after = out.join("\n");
+  const stillThere = findSection(after, sectionName);
+  const emptied = stillThere && dateBlocks(after, stillThere).filter((b) => b.date === date3).find((b) => !out.slice(b.headingLine + 1, b.end).some((l) => l.trim()));
+  if (emptied) out = out.filter((_, i) => i < emptied.headingLine || i >= emptied.end);
+  while (out.length > 1 && out[out.length - 1] === "" && out[out.length - 2].trim() === "") out.pop();
+  if (out[out.length - 1] !== "") out.push("");
+  return { content: out.join("\n"), removed };
 }
 function settle(lines, sectionName, keepNewest, blockCreated) {
   let out = [...lines];
@@ -15993,6 +16092,15 @@ function trimDatedLog(lines, sectionName, keep) {
 }
 function compare(line) {
   return line.trim().replace(/\s+/g, " ").toLowerCase();
+}
+function assertNotSimilar(line, body, where, notePath) {
+  const match = findSimilar(line, body);
+  if (!match) return;
+  throw new ToolError(
+    `entry is too similar (${match.score.toFixed(2)}) to one already in ${where} of ${notePath}: "${excerpt(
+      match.text
+    )}". If you already logged this in an earlier step, it is recorded \u2014 do not write it again. Pass allow_similar=true only if this is genuinely a separate event.`
+  );
 }
 function toTableRow(payload, table, sectionName, notePath) {
   if (payload.startsWith("|")) {
@@ -17735,6 +17843,10 @@ var sectionAppend = {
         type: "boolean",
         description: "Skip the append if identical content already exists in the section. Default true."
       },
+      allow_similar: {
+        type: "boolean",
+        description: "Append even when the content closely resembles something already in the section. Default false, which rejects the write and names what it resembles. Set this only for a genuinely separate entry that happens to read alike."
+      },
       create_section: {
         type: "boolean",
         description: "Create the section if it does not exist, in template position. Default false."
@@ -17778,6 +17890,7 @@ var sectionAppend = {
     const result = appendToSection(working, sectionName, content, {
       dedupe,
       keepNewest,
+      allowSimilar: bool(args, "allow_similar") ?? false,
       notePath: note.path
     });
     if (!result.changed && !created) {
@@ -17816,6 +17929,10 @@ var logAppend = {
         type: "boolean",
         description: "Skip lines already present in that day's block. Default true."
       },
+      allow_similar: {
+        type: "boolean",
+        description: "Write the entry even when it closely resembles one already in that day's block. Default false, which rejects the write and names the entry it resembles. Set this only for a genuinely separate event that happens to read alike \u2014 not to get past the error after re-deciding to log something you already logged."
+      },
       create_section: {
         type: "boolean",
         description: "Create the log section if it does not exist, in template position. Default false."
@@ -17852,6 +17969,7 @@ var logAppend = {
     const result = appendDatedEntry(working, sectionName, date3, content, {
       dedupe,
       keepNewest,
+      allowSimilar: bool(args, "allow_similar") ?? false,
       notePath: note.path
     });
     if (!result.changed && !created) {
@@ -17867,6 +17985,44 @@ var logAppend = {
       section_created: created,
       blocks: result.blocks,
       dropped: result.dropped
+    };
+  }
+};
+var logRemove = {
+  name: "log_remove",
+  description: 'Remove one or more entries from a single "### YYYY-MM-DD" block of a log section, matching on a substring of the entry text. The only tool here that deletes anything, and it exists for one job: undoing an entry this system wrote by mistake \u2014 a duplicate, or a wrong date \u2014 without dropping to a file edit. It is not for editing history the user wrote; if an entry is merely out of date, add a new entry saying so instead. Removing every entry in a block removes the now-empty date heading too.',
+  inputSchema: {
+    type: "object",
+    properties: {
+      note: { type: "string", description: "Note name or vault-relative path." },
+      section: { type: "string", description: 'The log heading, e.g. "Activity Log".' },
+      date: {
+        type: "string",
+        description: "YYYY-MM-DD of the block to remove from. Only this block is touched."
+      },
+      match: {
+        type: "string",
+        description: "Substring of the entry to remove, matched case-insensitively. Every entry in that block containing it is removed, so pass enough text to identify the one you mean."
+      }
+    },
+    required: ["note", "section", "date", "match"],
+    additionalProperties: false
+  },
+  handler: (args) => {
+    const sectionName = normalizeHeading(req(args, "section"));
+    const date3 = assertDate(req(args, "date"), "date");
+    const note = resolveWritable(req(args, "note"));
+    const current = readNote(note);
+    const result = removeDatedEntries(current.content, sectionName, date3, req(args, "match"), {
+      notePath: note.path
+    });
+    writeNoteGuarded(note.path, current.mtimeMs, result.content);
+    return {
+      path: note.path,
+      section: sectionName,
+      date: date3,
+      removed: result.removed.length,
+      entries: result.removed
     };
   }
 };
@@ -18751,6 +18907,7 @@ var TOOLS = [
   noteCreate,
   sectionAppend,
   logAppend,
+  logRemove,
   taskAdd,
   taskUpdate,
   dailyLog,

@@ -98,6 +98,10 @@ When updating a project:
    Pass the entry text only — no date prefix and no bullet marker. Never use `obsidian__section_append` on that section: it drops a bare line above every dated block, which is where the CLI-written entries of 2026-08-01 ended up.
 
    A project note written before the template carried `## Activity Log` will not have one, and the call fails naming the sections it does have. Add `create_section=true` to that call and the heading is created in template position.
+
+   If the call is refused as **too similar** to an entry already in that day's block, you already logged this — the error quotes the entry it collides with. Do not reword and retry; that is exactly how one turn wrote the same board purchase into a log three times. `allow_similar=true` is for a genuinely separate event that happens to read alike, not for getting past the message.
+
+   To undo an entry this system wrote by mistake, use `obsidian__log_remove note="[Project Name]" section="Activity Log" date="YYYY-MM-DD" match="<text from the entry>"`. It is the only tool here that deletes, it touches one dated block, and it exists so that fixing a bad entry never means editing the file directly. Do not use it on entries the user wrote — if something is merely out of date, log a new entry saying so.
 4. Add dates using the local timezone.
 5. Preserve existing tables and user wording where possible.
 6. Wikilink people in the `Who` columns of Conversation Log and Waiting On.
