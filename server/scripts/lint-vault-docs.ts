@@ -18,9 +18,14 @@ import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { setConfig, type Config } from "../src/config.ts";
-import { lintDocAgainstVault, type ShapeResolver } from "../src/doc-lint.ts";
-import { findSection, sectionShape } from "../src/sections.ts";
-import { invalidateIndex, readNote, resolveNote } from "../src/vault.ts";
+import {
+  lintDocAgainstVault,
+  lintVaultAgainstDocs,
+  type DatedSectionUse,
+  type ShapeResolver,
+} from "../src/doc-lint.ts";
+import { findSection, listSections, sectionShape } from "../src/sections.ts";
+import { getIndex, invalidateIndex, isTemplate, readNote, resolveNote } from "../src/vault.ts";
 
 const SKILLS_DIR = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
 const OPENCLAW_CONFIG = join(homedir(), ".openclaw", "openclaw.json");
@@ -87,23 +92,70 @@ const shapeOf: ShapeResolver = (noteRef, sectionName) => {
 const skills = readdirSync(SKILLS_DIR, { withFileTypes: true })
   .filter((e) => e.isDirectory() && e.name !== "server" && !e.name.startsWith("."))
   .map((e) => join(e.name, "SKILL.md"))
-  .filter((rel) => existsSync(join(SKILLS_DIR, rel)));
+  .filter((rel) => existsSync(join(SKILLS_DIR, rel)))
+  .map((rel) => ({ file: rel, content: readFileSync(join(SKILLS_DIR, rel), "utf8") }));
 
 let total = 0;
-for (const rel of skills) {
-  const problems = lintDocAgainstVault(readFileSync(join(SKILLS_DIR, rel), "utf8"), shapeOf);
-  if (problems.length === 0) continue;
-  console.error(`\n${rel}`);
-  for (const problem of problems) {
-    console.error(`  line ${problem.line}: ${problem.call}`);
+
+// Direction one: a doc naming the wrong tool for a section's real shape.
+const forward = skills
+  .map((skill) => ({ skill, problems: lintDocAgainstVault(skill.content, shapeOf) }))
+  .filter((r) => r.problems.length > 0);
+if (forward.length) {
+  console.error("\nDocs that contradict the vault");
+  for (const { skill, problems } of forward) {
+    console.error(`\n  ${skill.file}`);
+    for (const problem of problems) {
+      console.error(`    line ${problem.line}: ${problem.call}`);
+      console.error(`      ${problem.message}`);
+    }
+    total += problems.length;
+  }
+}
+
+/**
+ * Every dated section in the vault, by name. Templates are excluded because a
+ * template's `### YYYY-MM-DD` is a placeholder rather than a log, and `doc`
+ * notes because note_create deliberately gives them no section skeleton —
+ * a dated block inside a research doc is prose, not a convention to document.
+ */
+function datedSections(): DatedSectionUse[] {
+  const found = new Map<string, string[]>();
+  for (const note of getIndex().notes) {
+    if (isTemplate(note) || note.type === "doc") continue;
+    let content: string;
+    try {
+      ({ content } = readNote(note));
+    } catch {
+      continue;
+    }
+    for (const section of listSections(content)) {
+      if (section.level !== 2) continue;
+      if (sectionShape(content, section) !== "dated") continue;
+      if (!found.has(section.name)) found.set(section.name, []);
+      found.get(section.name)!.push(note.path);
+    }
+  }
+  return [...found.entries()].map(([name, notes]) => ({ name, notes }));
+}
+
+// Direction two: a dated section no skill tells the model how to write to.
+const sections = datedSections();
+const reverse = lintVaultAgainstDocs(sections, skills);
+if (reverse.length) {
+  console.error("\nDated sections no skill documents");
+  for (const problem of reverse) {
+    console.error(`\n  ## ${problem.section}  (${problem.notes.length} notes)`);
     console.error(`    ${problem.message}`);
   }
-  total += problems.length;
+  total += reverse.length;
 }
 
 console.error(
   total === 0
-    ? `\nlint:vault — ${skills.length} skills checked against ${vaultRoot}, no drift.`
+    ? `\nlint:vault — ${skills.length} skills and ${sections.length} dated section${
+        sections.length === 1 ? "" : "s"
+      } checked against ${vaultRoot}, no drift.`
     : `\n${total} problem${total === 1 ? "" : "s"}`,
 );
 process.exit(total === 0 ? 0 : 1);

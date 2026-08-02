@@ -37,6 +37,59 @@ function isLiteral(value: string): boolean {
   return value.length > 0 && !/[[\]<>{}]/.test(value) && !value.startsWith("YYYY");
 }
 
+/** A dated section name and the notes carrying it. */
+export interface DatedSectionUse {
+  name: string;
+  notes: string[];
+}
+
+export interface VaultProblem {
+  section: string;
+  notes: string[];
+  message: string;
+}
+
+/**
+ * Does this line both name the section and reach for log_append? Requiring the
+ * two together is deliberate: a section name in one paragraph and the tool in
+ * another is not guidance a model reliably connects, and putting them on one
+ * line is better prose anyway.
+ *
+ * The forms are the ones the docs actually use. A bare substring match would
+ * let a section called "Log" be satisfied by any line containing the word.
+ */
+function documents(line: string, name: string): boolean {
+  if (!line.includes("obsidian__log_append")) return false;
+  return (
+    line.includes(`section="${name}"`) || line.includes(`## ${name}`) || line.includes(`\`${name}\``)
+  );
+}
+
+/**
+ * Dated sections in the vault that no skill tells the model how to write to.
+ *
+ * The mirror of lintDocAgainstVault. That one catches a doc naming the wrong
+ * tool for a section; this catches a section no doc mentions at all — where the
+ * model has nothing to go on, reaches for section_append, and drops a bare line
+ * above the first date heading. The original bug, on a section the docs never
+ * covered.
+ */
+export function lintVaultAgainstDocs(
+  sections: DatedSectionUse[],
+  docs: { file: string; content: string }[],
+): VaultProblem[] {
+  const lines = docs.flatMap((d) => d.content.split("\n"));
+  return sections
+    .filter((s) => !lines.some((line) => documents(line, s.name)))
+    .map((s) => ({
+      section: s.name,
+      notes: s.notes,
+      message: `"${s.name}" holds ### YYYY-MM-DD blocks in ${s.notes.length} note${
+        s.notes.length === 1 ? "" : "s"
+      } (e.g. ${s.notes[0]}) but no SKILL.md names it alongside obsidian__log_append. With nothing to go on the model reaches for section_append, which drops a bare line above the first date heading.`,
+    }));
+}
+
 /** Documentation calls that name a section whose real shape contradicts them. */
 export function lintDocAgainstVault(content: string, resolve: ShapeResolver): DocProblem[] {
   const problems: DocProblem[] = [];

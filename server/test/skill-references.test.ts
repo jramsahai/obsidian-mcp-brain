@@ -3,7 +3,11 @@ import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, test } from "node:test";
-import { lintDocAgainstVault, type ShapeResolver } from "../src/doc-lint.ts";
+import {
+  lintDocAgainstVault,
+  lintVaultAgainstDocs,
+  type ShapeResolver,
+} from "../src/doc-lint.ts";
 import { type SectionShape } from "../src/sections.ts";
 import { TOOLS, TOOLS_BY_NAME } from "../src/tools.ts";
 
@@ -397,5 +401,103 @@ describe("doc-vs-vault lint", () => {
       lintDocAgainstVault(content, resolve).map((p) => p.line),
       [3],
     );
+  });
+});
+
+/**
+ * The mirror: a dated section the vault has and no skill documents. Same pure
+ * shape — the caller supplies the vault facts, so CI covers the rule.
+ */
+describe("vault-vs-doc lint", () => {
+  const activityLog = [{ name: "Activity Log", notes: ["Projects/A/A.md", "Projects/B/B.md"] }];
+  const lint = (sections: typeof activityLog, ...docs: string[]) =>
+    lintVaultAgainstDocs(
+      sections,
+      docs.map((content, i) => ({ file: `s${i}/SKILL.md`, content })),
+    ).map((p) => p.section);
+
+  test("flags a dated section no skill mentions", () => {
+    const problems = lintVaultAgainstDocs(
+      [{ name: "Change Log", notes: ["Projects/A/A.md"] }],
+      [{ file: "project-tracking/SKILL.md", content: "Log activity with obsidian__log_append." }],
+    );
+    assert.equal(problems.length, 1);
+    assert.equal(problems[0].section, "Change Log");
+    assert.match(problems[0].message, /no SKILL\.md names it alongside obsidian__log_append/);
+    assert.match(problems[0].message, /Projects\/A\/A\.md/);
+  });
+
+  test("accepts each form the docs actually use", () => {
+    for (const line of [
+      'obsidian__log_append note="X" section="Activity Log" content="y"',
+      "A dated entry in the running `## Activity Log` is `obsidian__log_append`.",
+      "Use `obsidian__log_append` for `Activity Log`.",
+    ]) {
+      assert.deepEqual(lint(activityLog, line), [], `should be documented by: ${line}`);
+    }
+  });
+
+  test("a name and the tool on separate lines is not documentation", () => {
+    // A model does not reliably connect a section named in one paragraph with
+    // a tool named in another. The fix is to put them together.
+    assert.deepEqual(
+      lint(activityLog, "The `## Activity Log` holds dated entries.\n\nUse obsidian__log_append."),
+      ["Activity Log"],
+    );
+  });
+
+  test("naming the section without the tool is not documentation", () => {
+    assert.deepEqual(lint(activityLog, "Every project note has an `## Activity Log`."), [
+      "Activity Log",
+    ]);
+  });
+
+  test("the wrong tool is not documentation", () => {
+    assert.deepEqual(lint(activityLog, 'obsidian__section_append section="Activity Log"'), [
+      "Activity Log",
+    ]);
+  });
+
+  test("a bare substring does not satisfy a short section name", () => {
+    // The trap in matching on the name alone: "Log" appears in almost every
+    // line about logging, so a section actually called "Log" would look
+    // documented by prose that never mentions it.
+    assert.deepEqual(
+      lint(
+        [{ name: "Log", notes: ["Projects/A/A.md"] }],
+        "Use obsidian__log_append to add to a running Log of activity.",
+      ),
+      ["Log"],
+    );
+    // ...but the real forms still count.
+    assert.deepEqual(
+      lint([{ name: "Log", notes: ["Projects/A/A.md"] }], 'obsidian__log_append section="Log"'),
+      [],
+    );
+  });
+
+  test("documentation may live in any skill, not a particular one", () => {
+    assert.deepEqual(
+      lint(activityLog, "Unrelated prose.", 'obsidian__log_append section="Activity Log"'),
+      [],
+    );
+  });
+
+  test("reports every undocumented section, not just the first", () => {
+    assert.deepEqual(
+      lint(
+        [
+          { name: "Change Log", notes: ["a.md"] },
+          { name: "Activity Log", notes: ["b.md"] },
+          { name: "Decision Log", notes: ["c.md"] },
+        ],
+        'obsidian__log_append section="Activity Log"',
+      ),
+      ["Change Log", "Decision Log"],
+    );
+  });
+
+  test("says nothing when the vault has no dated sections", () => {
+    assert.deepEqual(lint([], "anything"), []);
   });
 });
