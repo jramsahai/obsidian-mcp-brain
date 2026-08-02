@@ -15528,6 +15528,14 @@ function assertDate(value, field) {
   }
   return value;
 }
+function isDate(value) {
+  try {
+    assertDate(value, "date");
+    return true;
+  } catch {
+    return false;
+  }
+}
 var ToolError = class extends Error {
 };
 
@@ -15862,6 +15870,123 @@ function trimSection(lines, sectionName, keep, table) {
   if (entries.length <= keep) return content;
   const drop = new Set(entries.slice(0, entries.length - keep));
   return lines.filter((_, i) => !drop.has(i)).join("\n");
+}
+function dateHeading(name) {
+  const trimmed = name.trim();
+  return /^\d{4}-\d{2}-\d{2}$/.test(trimmed) && isDate(trimmed) ? trimmed : null;
+}
+function dateBlocks(content, section) {
+  const out = [];
+  for (const s of listSections(content)) {
+    if (s.headingLine <= section.headingLine || s.headingLine >= section.end) continue;
+    if (s.level !== section.level + 1) continue;
+    const date3 = dateHeading(s.name);
+    if (date3) out.push({ date: date3, headingLine: s.headingLine, end: Math.min(s.end, section.end) });
+  }
+  return out;
+}
+function isDatedLog(content, section) {
+  return dateBlocks(content, section).length > 0;
+}
+function entryLines(text, sectionName, notePath) {
+  const raw = text.replace(/\r/g, "").split("\n").map((l) => l.trimEnd());
+  while (raw.length && raw[0].trim() === "") raw.shift();
+  while (raw.length && raw[raw.length - 1].trim() === "") raw.pop();
+  if (raw.length === 0) throw new ToolError("content is empty; nothing to append.");
+  return raw.map((line) => {
+    if (/^#{1,6}\s/.test(line.trim())) {
+      throw new ToolError(
+        `content for "${sectionName}" in ${notePath} contains a heading ("${line.trim()}"); the date heading is written for you. Pass the entry text only.`
+      );
+    }
+    if (line.trim() === "") return "";
+    if (/^\s/.test(line)) return line;
+    if (/^([-*+]\s|\d+[.)]\s|>\s|\|)/.test(line)) return line;
+    return `- ${line}`;
+  });
+}
+function appendDatedEntry(content, sectionName, date3, text, options = {}) {
+  const { dedupe = true, notePath = "note", keepNewest } = options;
+  const section = requireSection(content, sectionName, notePath);
+  const name = normalizeHeading(sectionName);
+  const table = detectTable(content, { ...section, end: ownContentEnd(content, section) });
+  if (table) {
+    throw new ToolError(
+      `section "${name}" in ${notePath} is a table (${table.columns.join(
+        " | "
+      )}), not a dated log. Use section_append with a pipe-delimited row.`
+    );
+  }
+  const entry = entryLines(text, name, notePath);
+  const lines = content.split("\n");
+  const blocks = dateBlocks(content, section);
+  const existing = blocks.find((b) => b.date === date3);
+  if (existing) {
+    const bodyStart = existing.headingLine + 1;
+    const seen = new Set(lines.slice(bodyStart, existing.end).map(compare));
+    const fresh = dedupe ? entry.filter((l) => l.trim() === "" || !seen.has(compare(l))) : entry;
+    if (!fresh.some((l) => l.trim() !== "")) {
+      return {
+        content,
+        changed: false,
+        reason: `already present under "### ${date3}" in "${name}" \u2014 nothing appended`,
+        blockCreated: false,
+        blocks: blocks.length,
+        dropped: 0
+      };
+    }
+    const last = lastContentLine(lines, bodyStart, existing.end);
+    const insertAt = last === -1 ? bodyStart : last + 1;
+    const block = last === -1 && lines[insertAt - 1]?.trim() !== "" ? ["", ...fresh] : fresh;
+    return settle(
+      [...lines.slice(0, insertAt), ...block, ...lines.slice(insertAt)],
+      sectionName,
+      keepNewest,
+      false
+    );
+  }
+  const anchor = blocks.find((b) => b.date < date3)?.headingLine ?? (blocks.length ? blocks[blocks.length - 1].end : ownContentEnd(content, section));
+  const before = lines.slice(0, anchor);
+  while (before.length && before[before.length - 1].trim() === "") before.pop();
+  const rest = lines.slice(anchor);
+  const next = [...before, "", `${"#".repeat(section.level + 1)} ${date3}`, "", ...entry];
+  if (rest.some((l) => l.trim() !== "")) {
+    let i = 0;
+    while (i < rest.length && rest[i].trim() === "") i++;
+    next.push("", ...rest.slice(i));
+  }
+  return settle(next, sectionName, keepNewest, true);
+}
+function settle(lines, sectionName, keepNewest, blockCreated) {
+  let out = [...lines];
+  let dropped = 0;
+  if (keepNewest) ({ lines: out, dropped } = trimDatedLog(out, sectionName, keepNewest));
+  while (out.length > 1 && out[out.length - 1] === "" && out[out.length - 2].trim() === "") out.pop();
+  if (out[out.length - 1] !== "") out.push("");
+  const content = out.join("\n");
+  const section = findSection(content, sectionName);
+  return {
+    content,
+    changed: true,
+    blockCreated,
+    blocks: section ? dateBlocks(content, section).length : 0,
+    dropped
+  };
+}
+function trimDatedLog(lines, sectionName, keep) {
+  const content = lines.join("\n");
+  const section = findSection(content, sectionName);
+  if (!section) return { lines, dropped: 0 };
+  const blocks = dateBlocks(content, section);
+  if (blocks.length <= keep) return { lines, dropped: 0 };
+  const ranked = [...blocks].sort(
+    (a, b) => a.date === b.date ? a.headingLine - b.headingLine : b.date.localeCompare(a.date)
+  );
+  const drop = /* @__PURE__ */ new Set();
+  for (const block of ranked.slice(keep)) {
+    for (let i = block.headingLine; i < block.end; i++) drop.add(i);
+  }
+  return { lines: lines.filter((_, i) => !drop.has(i)), dropped: ranked.length - keep };
 }
 function compare(line) {
   return line.trim().replace(/\s+/g, " ").toLowerCase();
@@ -16605,6 +16730,7 @@ function buildNote(spec) {
           "Conversation Log|Date,Who,Summary",
           "Waiting On|What,Who,Since",
           "Related Tasks",
+          "Activity Log",
           "Related"
         ],
         fields,
@@ -17639,6 +17765,14 @@ var sectionAppend = {
       working = insertSection(working, sectionName, templateOrder(note));
       created = true;
     }
+    if (keepNewest !== void 0) {
+      const target = findSection(working, sectionName);
+      if (target && isDatedLog(working, target)) {
+        throw new ToolError(
+          `section "${sectionName}" in ${note.path} is a dated log of "### YYYY-MM-DD" blocks, where keep_newest counts nothing. Use log_append, which writes the date heading and caps the log by block.`
+        );
+      }
+    }
     const result = appendToSection(working, sectionName, content, {
       dedupe,
       keepNewest,
@@ -17654,6 +17788,83 @@ var sectionAppend = {
       appended: result.changed,
       section_created: created,
       as_table_row: result.asTableRow
+    };
+  }
+};
+var logAppend = {
+  name: "log_append",
+  description: `Add a dated entry to a running log section \u2014 a project note's Activity Log, an index note's Review Log. The server writes the "### YYYY-MM-DD" heading itself and keeps the newest date at the top; a second entry the same day joins that day's block instead of starting another, and an identical entry is skipped, so re-running is safe. Use this for any section built from dated blocks: section_append on one drops a bare line above the first date heading, which is not an entry, is not where a reader looks, and is never counted by keep_newest. Pass the entry text only \u2014 no date prefix, no heading, no bullet marker; a plain line is bulleted for you.`,
+  inputSchema: {
+    type: "object",
+    properties: {
+      note: { type: "string", description: "Note name or vault-relative path." },
+      section: {
+        type: "string",
+        description: 'The log heading, e.g. "Activity Log" on a project note or "Review Log" on an index note.'
+      },
+      content: {
+        type: "string",
+        description: "The entry. One line, or several lines for several bullets. No date prefix and no heading \u2014 the server writes the date heading."
+      },
+      date: {
+        type: "string",
+        description: "YYYY-MM-DD for the entry's block. Defaults to today in the vault's timezone. A back-dated entry is filed in date order, not on top."
+      },
+      dedupe: {
+        type: "boolean",
+        description: "Skip lines already present in that day's block. Default true."
+      },
+      create_section: {
+        type: "boolean",
+        description: "Create the log section if it does not exist, in template position. Default false."
+      },
+      keep_newest: {
+        type: "number",
+        minimum: 1,
+        description: "Cap the log at this many dated blocks, dropping the oldest by date. For a bounded log like a review log. Omit to keep everything \u2014 a project's activity log is history and should grow."
+      }
+    },
+    required: ["note", "section", "content"],
+    additionalProperties: false
+  },
+  handler: (args) => {
+    const ref = req(args, "note");
+    const sectionName = normalizeHeading(req(args, "section"));
+    const content = req(args, "content");
+    const dedupe = bool(args, "dedupe") ?? true;
+    const create = bool(args, "create_section") ?? false;
+    const date3 = str(args, "date") ? assertDate(req(args, "date"), "date") : today();
+    const keepNewest = num(args, "keep_newest");
+    if (keepNewest !== void 0 && (!Number.isInteger(keepNewest) || keepNewest < 1)) {
+      throw new ToolError(`keep_newest must be a whole number of at least 1; got ${keepNewest}.`);
+    }
+    const note = resolveWritable(ref);
+    const current = readNote(note);
+    let working = current.content;
+    let created = false;
+    if (!findSection(working, sectionName)) {
+      if (!create) requireSection(working, sectionName, note.path);
+      working = insertSection(working, sectionName, templateOrder(note));
+      created = true;
+    }
+    const result = appendDatedEntry(working, sectionName, date3, content, {
+      dedupe,
+      keepNewest,
+      notePath: note.path
+    });
+    if (!result.changed && !created) {
+      return { path: note.path, section: sectionName, date: date3, appended: false, reason: result.reason };
+    }
+    writeNoteGuarded(note.path, current.mtimeMs, result.content);
+    return {
+      path: note.path,
+      section: sectionName,
+      date: date3,
+      appended: result.changed,
+      block_created: result.blockCreated,
+      section_created: created,
+      blocks: result.blocks,
+      dropped: result.dropped
     };
   }
 };
@@ -18538,6 +18749,7 @@ var TOOLS = [
   vaultLinks,
   noteCreate,
   sectionAppend,
+  logAppend,
   taskAdd,
   taskUpdate,
   dailyLog,
