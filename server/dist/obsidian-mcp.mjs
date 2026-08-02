@@ -15497,6 +15497,9 @@ function formatDate(when, timezone) {
   const get = (type) => parts.find((p) => p.type === type)?.value ?? "";
   return `${get("year")}-${get("month")}-${get("day")}`;
 }
+function modifiedOn(mtimeMs, cfg = config2()) {
+  return formatDate(new Date(mtimeMs), cfg.timezone);
+}
 function localTime(cfg = config2(), now = /* @__PURE__ */ new Date()) {
   return new Intl.DateTimeFormat("en-GB", {
     timeZone: cfg.timezone,
@@ -17549,8 +17552,7 @@ var vaultList = {
     }
     if (changedSince) {
       assertDate(changedSince, "changed_since");
-      const cutoff = (/* @__PURE__ */ new Date(`${changedSince}T00:00:00`)).getTime();
-      notes = notes.filter((n) => n.mtimeMs >= cutoff);
+      notes = notes.filter((n) => modifiedOn(n.mtimeMs) >= changedSince);
     }
     if (latest) {
       const newest = [...notes].sort((a, b) => a.title.localeCompare(b.title)).pop();
@@ -17563,7 +17565,7 @@ var vaultList = {
         title: n.title,
         type: n.type,
         status: n.status,
-        modified: new Date(n.mtimeMs).toISOString().slice(0, 10)
+        modified: modifiedOn(n.mtimeMs)
       }))
     };
   }
@@ -18517,8 +18519,7 @@ var linkify = {
     let targets = ref ? [resolveNote(ref)] : getIndex().notes;
     if (!ref && since) {
       assertDate(since, "since");
-      const cutoff = (/* @__PURE__ */ new Date(`${since}T00:00:00`)).getTime();
-      targets = targets.filter((n) => n.mtimeMs >= cutoff);
+      targets = targets.filter((n) => modifiedOn(n.mtimeMs) >= since);
     }
     const entities = buildEntities();
     const plan = planLinkify(targets, entities);
