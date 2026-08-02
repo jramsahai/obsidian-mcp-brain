@@ -33,6 +33,7 @@ Call `obsidian__vault_status` first in any scheduled or exploratory run. It answ
 | Backlinks, outgoing links, unresolved, orphans, deadends | `obsidian__vault_links` |
 | Create a new note of any kind | `obsidian__note_create` |
 | Add a line under a specific heading | `obsidian__section_append` |
+| Add a dated entry to a running log | `obsidian__log_append` |
 | Add a task | `obsidian__task_add` |
 | Change or complete a task | `obsidian__task_update` |
 | Log a personal journal entry | `obsidian__daily_log` |
@@ -104,6 +105,7 @@ Existing notes that predate this and lack frontmatter are left as they are. `obs
 - **A new note of any kind** -> `obsidian__note_create`. It derives the path from type and name, so `[[Wikilinks]]` to it resolve. It never overwrites a note that already has content — the call succeeds with `created: false` and a reason, so branch on that and append instead. It refuses generic names like `Overview`, and names containing `#`, `|`, `[`, or `]`, which would break the wikilink to the note.
 - Template notes (frontmatter `template: true`) are not writable by any tool. A write to one is refused, because every note later created from it would inherit the contamination.
 - **Content under an existing heading** -> `obsidian__section_append`. It appends at the end of the *named section*, so content cannot land after the wrong heading or at the bottom of the file. When the section holds a table it appends a table row; pass the content pipe-delimited (`| 2026-07-31 | Topic | Summary |`) and it names the columns if you get it wrong.
+- **A dated entry in a running log** -> `obsidian__log_append`. A project note's `## Activity Log` and an index note's `## Review Log` are built from `### YYYY-MM-DD` blocks; it writes that heading for you, keeps the newest date at the top, and merges a same-day second entry into that day's block. Pass the entry text only. `obsidian__section_append` on such a section drops a bare line above the first date heading, which is not an entry and is not where a reader looks.
 - **A journal entry** -> `obsidian__daily_log`. **A checkbox item** -> `obsidian__checklist_set`. **A task** -> `obsidian__task_add`.
 
 Repeat calls are safe everywhere: identical content is skipped rather than duplicated.
@@ -132,13 +134,13 @@ Other shared rules:
 What automated passes (nightly consolidation, entity linking) may do to existing notes. Where a tool enforces the rule, it is named — that rule needs no vigilance from you.
 
 - Allowed inline: converting a plain-text mention of an existing person, project, or knowledge note into a wikilink — exact same words, only brackets added. *Enforced by `obsidian__linkify`, the only tool that edits inside prose. It skips headings, code, URLs, frontmatter, and existing links, and links only the first mention per note.*
-- Everything else is append-only: `## Related` sections, MOC updates, synthesis notes, review-log entries. *Enforced by `obsidian__section_append` and `obsidian__relate`, which only ever append.*
-- Idempotent re-runs: re-running a pass over the same notes must change nothing. *Enforced by every write tool skipping content already present — `obsidian__section_append` dedupes, `obsidian__task_add` rejects near-duplicates, `obsidian__relate` skips linked targets, `obsidian__checklist_set` merges into the existing line, `obsidian__linkify` sees its own brackets.*
+- Everything else is append-only: `## Related` sections, MOC updates, synthesis notes, review-log entries. *Enforced by `obsidian__section_append`, `obsidian__log_append`, and `obsidian__relate`, which only ever append.*
+- Idempotent re-runs: re-running a pass over the same notes must change nothing. *Enforced by every write tool skipping content already present — `obsidian__section_append` dedupes, `obsidian__log_append` joins the day's existing block instead of starting another, `obsidian__task_add` rejects near-duplicates, `obsidian__relate` skips linked targets, `obsidian__checklist_set` merges into the existing line, `obsidian__linkify` sees its own brackets.*
 - Never rewrite, reorder, or summarize user prose, especially in `Daily/` notes.
 - Never delete. Merging means all content lands in the destination. *Enforced by the tool surface: nothing exposed deletes a note, and only two tools remove a line at all — both bounded to inboxes, and both requiring the content to exist elsewhere first.*
 - Inbox routing is the one sanctioned move. *Enforced by `obsidian__inbox_route`, which writes the destination, verifies it, and only then removes the source line — so the item cannot end up nowhere. `obsidian__inbox_clear` covers the other half: an item already captured by `obsidian__task_add` or `obsidian__note_create` is cleared by naming the note that took it.*
 - Connections between notes are the model's judgment, not the server's. `obsidian__relate` fixes the shape of a connection and caps how many one note takes in a night — inbound mirrored links included; deciding *which* notes are related, and writing the reason, is yours.
-- A bounded log stays bounded in the same write: `obsidian__section_append` with `keep_newest=20` caps a `## Review Log` as it appends. This is the only sanctioned trimming, and it is not content deletion.
+- A bounded log stays bounded in the same write: `obsidian__log_append` with `keep_newest=20` caps a `## Review Log` at its 20 newest dated blocks as it appends. `obsidian__section_append`'s own `keep_newest` covers flat lists only, and refuses a dated section by name rather than deleting whole days around a line it cannot count. This is the only sanctioned trimming, and it is not content deletion.
 - `Standup.md` is the one generated note, replaced whole each morning by `obsidian__standup_write`. No other note can be replaced, and the native write tools remain off-limits everywhere including here.
 - Snapshot around any automated pass with `obsidian__vault_snapshot`: `scope="all"` first to park the user's own uncommitted edits, then the default `scope="machine"` after, which commits only what the pass wrote. One reviewable commit per pass is the recovery story, and scoping is what keeps reverting it from discarding the user's work.
 

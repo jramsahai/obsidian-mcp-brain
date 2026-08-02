@@ -18,6 +18,7 @@ Manage project records in the user's Obsidian second brain. Use `second-brain` f
 - Project note: `Projects/[Project Name]/[Project Name].md` — named after the project so `[[Project Name]]` wikilinks resolve to it. Created with `obsidian__note_create type="project"`; the path is derived, never hand-constructed.
 - Central task file: `Tasks.md`, written through `obsidian__task_add` and `obsidian__task_update`.
 - Adding a table row or a line under a heading is `obsidian__section_append`, which targets the named section rather than the end of the file.
+- A dated entry in the running `## Activity Log` is `obsidian__log_append`, which writes the `### YYYY-MM-DD` heading itself and keeps the newest day at the top. That section is not a `obsidian__section_append` target.
 
 ## Project Note Template
 
@@ -59,6 +60,12 @@ topics: []
 
 - Task text (see [[Tasks]])
 
+## Activity Log
+
+### YYYY-MM-DD
+
+- What happened, newest date first
+
 ## Related
 
 - [[Knowledge note or other related note]] — why it is related
@@ -81,10 +88,17 @@ When updating a project:
 
 1. Read the existing project note.
 2. Append to the relevant section with `obsidian__section_append`, and keep the `status`, `people`, and `topics` properties in sync with `obsidian__note_set_field note="[Project Name]" field="status" value="On Hold"`. Stale frontmatter is not cosmetic: `standup` lists active projects with `obsidian__vault_list type="project" status="Active"`, so a project left `Active` after it stops is reported as live work every weekday until someone notices.
-3. Add dates using the local timezone.
-4. Preserve existing tables and user wording where possible.
-5. Wikilink people in the `Who` columns of Conversation Log and Waiting On.
-6. If task state changes are implied but not explicit, mention the possible task update instead of changing `Tasks.md` silently.
+3. Log what happened in the `## Activity Log`:
+
+   ```
+   obsidian__log_append note="[Project Name]" section="Activity Log" content="Proposal sent; awaiting response"
+   ```
+
+   Pass the entry text only — no date prefix and no bullet marker. Never use `obsidian__section_append` on that section: it drops a bare line above every dated block, which is where the CLI-written entries of 2026-08-01 ended up.
+4. Add dates using the local timezone.
+5. Preserve existing tables and user wording where possible.
+6. Wikilink people in the `Who` columns of Conversation Log and Waiting On.
+7. If task state changes are implied but not explicit, mention the possible task update instead of changing `Tasks.md` silently.
 
 ## Project-Task Relationship
 

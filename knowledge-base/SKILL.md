@@ -132,10 +132,10 @@ Invoked as part of `nightly-consolidation`:
 8. Append a dated review entry to the `## Review Log` in the KB index:
 
    ```
-   obsidian__section_append note="Knowledge Base/README.md" section="Review Log" content="- 2026-07-31: routed 3 inbox items, added Cycling MOC" keep_newest=20
+   obsidian__log_append note="Knowledge Base/README.md" section="Review Log" content="Routed 3 inbox items, added Cycling MOC" keep_newest=20
    ```
 
-   `keep_newest` caps the log at its 20 newest entries in the same write, so it never needs trimming by hand. If the index does not exist yet, create it with `obsidian__note_create type="index" name="Knowledge Base"`. This is the only place the KB review log lives; never write review logs into project, people, or daily notes.
+   The `## Review Log` is built from `### YYYY-MM-DD` blocks, and the server writes that heading itself — pass the entry text only, with no date prefix and no bullet marker. Today's block goes at the top, and a second entry the same night joins it rather than starting another. `keep_newest` caps the log at its 20 newest dated blocks in the same write, so it never needs trimming by hand. If the index does not exist yet, create it with `obsidian__note_create type="index" name="Knowledge Base"`. This is the only place the KB review log lives; never write review logs into project, people, or daily notes.
 9. If nothing changed, skip the log entry entirely; do not accumulate "nothing happened" entries.
 
 Do not spend the nightly review polishing prose for its own sake. The goal is findability and sensible structure.

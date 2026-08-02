@@ -32,7 +32,7 @@ The mechanical half of this run is enforced by tools and needs no vigilance from
 Why the run is shaped the way it is. Each rule names the tool that enforces it, so it needs no vigilance from you.
 
 - Inline edits are limited to entity linking — identical words, only brackets added. *Enforced by `obsidian__linkify`, which is the only tool that edits inside prose and cannot do anything else.*
-- Everything else is append-only. *Enforced by the tool surface: `obsidian__section_append`, `obsidian__relate`, and `obsidian__checklist_set` only ever add.*
+- Everything else is append-only. *Enforced by the tool surface: `obsidian__section_append`, `obsidian__log_append`, `obsidian__relate`, and `obsidian__checklist_set` only ever add.*
 - Re-runs are idempotent. *Enforced by every write tool skipping content that is already present. A second pass over the same notes changes nothing.*
 - Never rewrite, reorder, summarize, or "improve" user prose — daily notes especially.
 - Never delete. *Enforced by the tool surface: nothing exposed deletes a note, and only two tools remove a line — `obsidian__inbox_route`, which removes the source line only after verifying the destination write, and `obsidian__inbox_clear`, which removes an inbox line only when the note that captured it exists. Both are bounded to inboxes.*
@@ -88,7 +88,7 @@ This is the judgment step. For each note worth connecting:
 ### 5. MOC and index maintenance
 
 - Per `knowledge-base`: topics with roughly 5+ notes get a MOC, created with `obsidian__note_create type="moc"`. Update existing MOCs with new notes via `obsidian__section_append`.
-- Keep `Knowledge Base/README.md` pointing at MOCs and top-level topics, and append the dated review entry there with `keep_newest=20` (see `knowledge-base`). If that index note does not exist yet, create it with `obsidian__note_create type="index" name="Knowledge Base"`.
+- Keep `Knowledge Base/README.md` pointing at MOCs and top-level topics, and append the dated review entry to its `## Review Log` with `obsidian__log_append`, capped at 20 dated blocks (see `knowledge-base` for the exact call). That log is built from `### YYYY-MM-DD` blocks, so it is not a `obsidian__section_append` target. If that index note does not exist yet, create it with `obsidian__note_create type="index" name="Knowledge Base"`.
 
 ### 6. Graph hygiene
 
