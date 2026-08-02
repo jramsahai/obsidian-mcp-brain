@@ -81,8 +81,9 @@ When creating a project:
 
 1. Normalize the project name to Title Case unless the user gives exact casing.
 2. `obsidian__note_create type="project" name="[Project Name]"` — the server creates the folder, the note, the frontmatter, and the standard sections. Pass known values through `fields`, e.g. `fields={"status":"Active","people":"Jane Doe, Sam Lee","description":"One line"}`; `people` becomes quoted wikilinks.
-3. Fill the sections with `obsidian__section_append`. Use `[[First Last]]` wikilinks for every person named.
-4. If the user also gives actionable work, route to `task-tracking` to add tasks to `Tasks.md`.
+3. If the user supplied a written brief — a spec, a plan, hardware or API details, a phased roadmap, anything with its own headings — **the brief is the deliverable, not raw material for a summary.** Create `obsidian__note_create type="doc" name="technical-brief" project="[Project Name]" body="<the full text>"` first, before filling any section, and wikilink it from `## Related`. A doc note gets no section skeleton precisely so it can hold a document whole. Demote the brief's headings one level so the note keeps a single H1.
+4. Fill the project note's sections with `obsidian__section_append`. Use `[[First Last]]` wikilinks for every person named. The sections summarize and point at the doc; they never replace it.
+5. If the user also gives actionable work, route to `task-tracking` to add tasks to `Tasks.md`.
 
 When updating a project:
 
@@ -138,6 +139,8 @@ Docs — `obsidian__note_create type="doc" name="vendor-comparison" project="Pro
 
 ## Safety
 
+- **Never compress supplied material to make it fit a section.** The project template has no section shaped like a spec, so a brief pushed into `## Key Decisions` arrives as a table row with the wrong number of cells and the server rejects it. That rejection means the content has no home yet — create the doc note. It does not mean write one summary line and drop the rest. On 2026-08-02 a full ESP32 hardware and API brief became a single decision row this way, and nothing else survived.
+- Detail is lost silently. A section that is merely thin looks the same as one the user never filled in, so there is no later signal that anything went missing — the check has to happen while the material is still in front of you.
 - Do not invent project metadata.
 - Do not create tasks without clear actionable wording.
 - Do not create a project from a vague idea unless the user asks to track it as a project; otherwise capture it to `Inbox.md` or use the idea pipeline if appropriate.
