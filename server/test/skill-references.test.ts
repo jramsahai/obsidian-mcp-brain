@@ -3,6 +3,8 @@ import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, test } from "node:test";
+import { lintDocAgainstVault, type ShapeResolver } from "../src/doc-lint.ts";
+import { type SectionShape } from "../src/sections.ts";
 import { TOOLS, TOOLS_BY_NAME } from "../src/tools.ts";
 
 /**
@@ -288,6 +290,112 @@ describe("skill tool references", () => {
     assert.deepEqual(
       lintSkillDocument('`obsidian__task_add text="x" project="Y" due="2026-08-01"`'),
       [],
+    );
+  });
+});
+
+/**
+ * The other half of the drift lint: prose against the vault, not the schemas.
+ * The vault cannot be reached from CI, so the rule is pure and the shapes are
+ * supplied here. `npm run lint:vault` wires the same rule to the real vault.
+ */
+describe("doc-vs-vault lint", () => {
+  const shapes: Record<string, SectionShape> = {
+    "Knowledge Base/README.md::Review Log": "dated",
+    "Example Project::Activity Log": "dated",
+    "Example Project::Conversation Log": "table",
+    "Example Project::Related": "flat",
+  };
+  const resolve: ShapeResolver = (note, section) => shapes[`${note}::${section}`] ?? null;
+  const lint = (content: string) => lintDocAgainstVault(content, resolve).map((p) => p.message);
+
+  test("catches the review-log contradiction that shipped for weeks", () => {
+    // The exact line from knowledge-base/SKILL.md before log_append existed.
+    // Every schema check passed on it; the section had held dated blocks since
+    // 2026-07-09 and the keep_newest had never once fired.
+    const problems = lint(
+      'obsidian__section_append note="Knowledge Base/README.md" section="Review Log" content="- 2026-07-31: routed 3 inbox items" keep_newest=20',
+    );
+    assert.equal(problems.length, 1);
+    assert.match(problems[0], /holds ### YYYY-MM-DD blocks/);
+    assert.match(problems[0], /obsidian__log_append/);
+  });
+
+  test("catches log_append aimed at a table", () => {
+    const problems = lint(
+      'obsidian__log_append note="Example Project" section="Conversation Log" content="Spoke with Jane"',
+    );
+    assert.equal(problems.length, 1);
+    assert.match(problems[0], /is a table, not a dated log/);
+    assert.match(problems[0], /obsidian__section_append/);
+  });
+
+  test("catches log_append aimed at a flat list", () => {
+    const problems = lint(
+      'obsidian__log_append note="Example Project" section="Related" content="- [[X]] — why"',
+    );
+    assert.equal(problems.length, 1);
+    assert.match(problems[0], /is a flat list, not a dated log/);
+  });
+
+  test("passes each tool aimed at the section shape it is for", () => {
+    assert.deepEqual(
+      lint('obsidian__log_append note="Example Project" section="Activity Log" content="Shipped."'),
+      [],
+    );
+    assert.deepEqual(
+      lint(
+        'obsidian__section_append note="Example Project" section="Conversation Log" content="| a | b | c |"',
+      ),
+      [],
+    );
+    assert.deepEqual(
+      lint('obsidian__section_append note="Example Project" section="Related" content="- [[X]] — y"'),
+      [],
+    );
+  });
+
+  test("ignores placeholders, which name no real section", () => {
+    assert.deepEqual(
+      lint('obsidian__section_append note="[Project Name]" section="Review Log" content="x"'),
+      [],
+      "a bracketed placeholder cannot drift",
+    );
+    assert.deepEqual(
+      lint('obsidian__log_append note="Example Project" section="<section>" content="x"'),
+      [],
+    );
+  });
+
+  test("ignores a note or section the vault does not have", () => {
+    // Absence is not drift: the docs may describe a note yet to be created.
+    assert.deepEqual(
+      lint('obsidian__log_append note="Nonexistent Note" section="Activity Log" content="x"'),
+      [],
+    );
+    assert.deepEqual(
+      lint('obsidian__section_append note="Example Project" section="Nowhere" content="x"'),
+      [],
+    );
+  });
+
+  test("attributes arguments to the nearest tool on a line naming two", () => {
+    const problems = lint(
+      'Use obsidian__note_create type="index" then obsidian__section_append note="Knowledge Base/README.md" section="Review Log" content="x"',
+    );
+    assert.equal(problems.length, 1, "the section_append must be blamed, not the note_create");
+    assert.match(problems[0], /Review Log/);
+  });
+
+  test("reports the line number so the file can be fixed", () => {
+    const content = [
+      "# Heading",
+      "",
+      'obsidian__section_append note="Knowledge Base/README.md" section="Review Log" content="x"',
+    ].join("\n");
+    assert.deepEqual(
+      lintDocAgainstVault(content, resolve).map((p) => p.line),
+      [3],
     );
   });
 });

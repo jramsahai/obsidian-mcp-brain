@@ -269,6 +269,21 @@ export function isDatedLog(content: string, section: Section): boolean {
   return dateBlocks(content, section).length > 0;
 }
 
+/** What a section holds, which decides the tool that may write to it. */
+export type SectionShape = "table" | "dated" | "flat";
+
+/**
+ * Classify a section by what it already holds. `dated` takes precedence: a
+ * table nested inside one date block must not make the whole log look
+ * table-shaped, which is why the table check is scoped to the section's own
+ * content rather than everything under it.
+ */
+export function sectionShape(content: string, section: Section): SectionShape {
+  if (isDatedLog(content, section)) return "dated";
+  const own = { ...section, end: ownContentEnd(content, section) };
+  return detectTable(content, own) ? "table" : "flat";
+}
+
 /**
  * A log entry is a flat bullet list — that is what every dated section in the
  * vault holds, without exception. Unbulleted prose renders as a paragraph glued
