@@ -95,5 +95,15 @@ export function assertDate(value: string, field: string): string {
   return value;
 }
 
+/** True when `value` is a real calendar date in YYYY-MM-DD form. */
+export function isDate(value: string): boolean {
+  try {
+    assertDate(value, "date");
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 /** An error whose message is meant to be read by the model and acted on. */
 export class ToolError extends Error {}

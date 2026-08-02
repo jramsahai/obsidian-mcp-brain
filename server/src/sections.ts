@@ -1,4 +1,4 @@
-import { ToolError } from "./config.ts";
+import { isDate, ToolError } from "./config.ts";
 import { scanLines } from "./scan.ts";
 
 export interface Section {
@@ -227,6 +227,216 @@ function trimSection(
   if (entries.length <= keep) return content;
   const drop = new Set(entries.slice(0, entries.length - keep));
   return lines.filter((_, i) => !drop.has(i)).join("\n");
+}
+
+/**
+ * Strict on purpose. `### 2026-03-18: Comprehensive Research Initiative` and
+ * `### 2026-03-18 Conversation with Devon` are headings a human wrote over real
+ * content, not log blocks: reading them as blocks would append a same-day entry
+ * into the middle of an essay, and keep_newest would delete it as "an old
+ * entry". `### 2026-02-31` is rejected for the same reason assertDate exists.
+ */
+function dateHeading(name: string): string | null {
+  const trimmed = name.trim();
+  return /^\d{4}-\d{2}-\d{2}$/.test(trimmed) && isDate(trimmed) ? trimmed : null;
+}
+
+/** One `### YYYY-MM-DD` block inside a dated log section. */
+export interface DateBlock {
+  date: string;
+  /** Index of the `### <date>` heading line. */
+  headingLine: number;
+  /** Exclusive end — the next heading at that level or higher, clamped to the section. */
+  end: number;
+}
+
+/** The `### YYYY-MM-DD` blocks directly inside a section, in document order. */
+export function dateBlocks(content: string, section: Section): DateBlock[] {
+  const out: DateBlock[] = [];
+  for (const s of listSections(content)) {
+    if (s.headingLine <= section.headingLine || s.headingLine >= section.end) continue;
+    // Exactly one level down. A `#### 2026-01-01` nested inside a block is part
+    // of that block's body, not a sibling block.
+    if (s.level !== section.level + 1) continue;
+    const date = dateHeading(s.name);
+    if (date) out.push({ date, headingLine: s.headingLine, end: Math.min(s.end, section.end) });
+  }
+  return out;
+}
+
+/** True when a section is built from `### YYYY-MM-DD` blocks. */
+export function isDatedLog(content: string, section: Section): boolean {
+  return dateBlocks(content, section).length > 0;
+}
+
+/**
+ * A log entry is a flat bullet list — that is what every dated section in the
+ * vault holds, without exception. Unbulleted prose renders as a paragraph glued
+ * to the bullets above it, and a `###` smuggled through `content` would create a
+ * second date heading that nothing here can order or dedupe against.
+ */
+function entryLines(text: string, sectionName: string, notePath: string): string[] {
+  const raw = text.replace(/\r/g, "").split("\n").map((l) => l.trimEnd());
+  while (raw.length && raw[0].trim() === "") raw.shift();
+  while (raw.length && raw[raw.length - 1].trim() === "") raw.pop();
+  if (raw.length === 0) throw new ToolError("content is empty; nothing to append.");
+  return raw.map((line) => {
+    if (/^#{1,6}\s/.test(line.trim())) {
+      throw new ToolError(
+        `content for "${sectionName}" in ${notePath} contains a heading ("${line.trim()}"); the date heading is written for you. Pass the entry text only.`,
+      );
+    }
+    if (line.trim() === "") return "";
+    if (/^\s/.test(line)) return line; // an indented continuation line
+    if (/^([-*+]\s|\d+[.)]\s|>\s|\|)/.test(line)) return line; // already carries a marker
+    return `- ${line}`;
+  });
+}
+
+export interface DatedAppendResult {
+  content: string;
+  changed: boolean;
+  reason?: string;
+  /** True when a new `### <date>` heading was written. */
+  blockCreated: boolean;
+  /** `### <date>` blocks in the section after the write. */
+  blocks: number;
+  /** Blocks dropped by keepNewest. */
+  dropped: number;
+}
+
+/**
+ * Append an entry to a section built from `### YYYY-MM-DD` blocks. The date
+ * heading is the server's to write: appendToSection on such a section finds an
+ * empty own-content span, falls through to `section.start`, and prepends a bare
+ * line directly under the `##` heading above every dated block — which is what
+ * every hand-written "add today's entry" call did before this existed.
+ */
+export function appendDatedEntry(
+  content: string,
+  sectionName: string,
+  date: string,
+  text: string,
+  options: { dedupe?: boolean; notePath?: string; keepNewest?: number } = {},
+): DatedAppendResult {
+  const { dedupe = true, notePath = "note", keepNewest } = options;
+  const section = requireSection(content, sectionName, notePath);
+  const name = normalizeHeading(sectionName);
+
+  // A table and a dated log are different section shapes, and the wrong one
+  // writes literal pipe text under a date heading. Look only at the section's
+  // own body: a table inside one date block must not make the log table-shaped.
+  const table = detectTable(content, { ...section, end: ownContentEnd(content, section) });
+  if (table) {
+    throw new ToolError(
+      `section "${name}" in ${notePath} is a table (${table.columns.join(
+        " | ",
+      )}), not a dated log. Use section_append with a pipe-delimited row.`,
+    );
+  }
+
+  const entry = entryLines(text, name, notePath);
+  const lines = content.split("\n");
+  const blocks = dateBlocks(content, section);
+  const existing = blocks.find((b) => b.date === date);
+
+  if (existing) {
+    const bodyStart = existing.headingLine + 1;
+    const seen = new Set(lines.slice(bodyStart, existing.end).map(compare));
+    const fresh = dedupe ? entry.filter((l) => l.trim() === "" || !seen.has(compare(l))) : entry;
+    if (!fresh.some((l) => l.trim() !== "")) {
+      return {
+        content,
+        changed: false,
+        reason: `already present under "### ${date}" in "${name}" — nothing appended`,
+        blockCreated: false,
+        blocks: blocks.length,
+        dropped: 0,
+      };
+    }
+    const last = lastContentLine(lines, bodyStart, existing.end);
+    const insertAt = last === -1 ? bodyStart : last + 1;
+    // One blank line after a bare `### <date>`, none between consecutive
+    // bullets. A block's own style is left alone — several notes write their
+    // bullets flush under the heading and should stay that way.
+    const block = last === -1 && lines[insertAt - 1]?.trim() !== "" ? ["", ...fresh] : fresh;
+    return settle(
+      [...lines.slice(0, insertAt), ...block, ...lines.slice(insertAt)],
+      sectionName,
+      keepNewest,
+      false,
+    );
+  }
+
+  // Newest first — and a back-dated entry lands where its date belongs rather
+  // than on top of newer ones. Always-on-top writes 2026-05-01 above 2026-07-07
+  // and the log stops reading in order.
+  const anchor =
+    blocks.find((b) => b.date < date)?.headingLine ??
+    (blocks.length ? blocks[blocks.length - 1].end : ownContentEnd(content, section));
+
+  const before = lines.slice(0, anchor);
+  while (before.length && before[before.length - 1].trim() === "") before.pop();
+  const rest = lines.slice(anchor);
+  const next = [...before, "", `${"#".repeat(section.level + 1)} ${date}`, "", ...entry];
+  if (rest.some((l) => l.trim() !== "")) {
+    let i = 0;
+    while (i < rest.length && rest[i].trim() === "") i++;
+    next.push("", ...rest.slice(i));
+  }
+  return settle(next, sectionName, keepNewest, true);
+}
+
+function settle(
+  lines: string[],
+  sectionName: string,
+  keepNewest: number | undefined,
+  blockCreated: boolean,
+): DatedAppendResult {
+  let out = [...lines];
+  let dropped = 0;
+  if (keepNewest) ({ lines: out, dropped } = trimDatedLog(out, sectionName, keepNewest));
+  // Exactly one trailing newline, whether or not the file had one and wherever
+  // the block landed. The 2026-08-01 CLI fallback left one of these notes with
+  // none, and a dropped trailing block takes the final newline with it.
+  while (out.length > 1 && out[out.length - 1] === "" && out[out.length - 2].trim() === "") out.pop();
+  if (out[out.length - 1] !== "") out.push("");
+  const content = out.join("\n");
+  const section = findSection(content, sectionName);
+  return {
+    content,
+    changed: true,
+    blockCreated,
+    blocks: section ? dateBlocks(content, section).length : 0,
+    dropped,
+  };
+}
+
+/**
+ * Cap a dated log at its `keep` newest `### <date>` blocks. Blocks are ranked by
+ * date, not by position: the vault's logs are a mix of descending, ascending,
+ * and scrambled, so dropping from the top would delete the newest entries in a
+ * third of them. A whole block goes at once — heading, body, and the blank line
+ * that separated it from the next heading.
+ */
+function trimDatedLog(
+  lines: string[],
+  sectionName: string,
+  keep: number,
+): { lines: string[]; dropped: number } {
+  const content = lines.join("\n");
+  const section = findSection(content, sectionName);
+  if (!section) return { lines, dropped: 0 };
+  const blocks = dateBlocks(content, section);
+  if (blocks.length <= keep) return { lines, dropped: 0 };
+  const ranked = [...blocks].sort((a, b) =>
+    a.date === b.date ? a.headingLine - b.headingLine : b.date.localeCompare(a.date),
+  );
+  const drop = new Set<number>();
+  for (const block of ranked.slice(keep)) {
+    for (let i = block.headingLine; i < block.end; i++) drop.add(i);
+  }
+  return { lines: lines.filter((_, i) => !drop.has(i)), dropped: ranked.length - keep };
 }
 
 function compare(line: string): string {
