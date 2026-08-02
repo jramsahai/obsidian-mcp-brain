@@ -1,4 +1,6 @@
 import assert from "node:assert/strict";
+import { writeFileSync } from "node:fs";
+import { join } from "node:path";
 import { afterEach, beforeEach, describe, test } from "node:test";
 import { call, callFails, cleanupVault, read, useVault } from "./helpers.ts";
 
@@ -269,10 +271,10 @@ describe("section_append", () => {
   test("a missing section lists the sections that exist", () => {
     const message = callFails("section_append", {
       note: "Example Project",
-      section: "Activity Log",
+      section: "Retrospective",
       content: "- something",
     });
-    assert.match(message, /section "Activity Log" not found/);
+    assert.match(message, /section "Retrospective" not found/);
     assert.match(message, /sections present: .*Key Decisions/);
   });
 
@@ -284,7 +286,8 @@ describe("section_append", () => {
       create_section: true,
     });
     const doc = read(root, "Projects/Example Project/Example Project.md");
-    assert.ok(doc.indexOf("## Related\n") < doc.indexOf("## Activity Log"));
+    assert.ok(doc.indexOf("## Related Tasks") < doc.indexOf("## Activity Log"));
+    assert.ok(doc.indexOf("## Activity Log") < doc.indexOf("## Related\n"));
     assert.match(doc, /## Activity Log\n\n- 2026-07-31: reviewed/);
   });
 
@@ -300,5 +303,155 @@ describe("section_append", () => {
       callFails("section_append", { note: "2026-07-30", section: "Not A Real Section", content: "- x" }),
       /not found/,
     );
+  });
+});
+
+describe("log_append", () => {
+  const PATH = "Projects/Example Project/Example Project.md";
+
+  /** A project note whose Activity Log already holds two dated blocks. */
+  function withLog(): void {
+    writeFileSync(
+      join(root, PATH),
+      read(root, PATH).replace(
+        "## Related\n",
+        "## Activity Log\n\n### 2026-07-07\n\n- Kickoff held.\n\n### 2026-04-27\n\n- Scoping call.\n\n## Related\n",
+      ),
+    );
+  }
+
+  test("writes the date heading itself, above the existing blocks", () => {
+    withLog();
+    const result = call("log_append", {
+      note: "Example Project",
+      section: "Activity Log",
+      content: "Proposal sent.",
+      date: "2026-08-01",
+    });
+    assert.equal(result.appended, true);
+    assert.equal(result.block_created, true);
+    assert.equal(result.blocks, 3);
+    const doc = read(root, PATH);
+    assert.match(doc, /## Activity Log\n\n### 2026-08-01\n\n- Proposal sent\.\n\n### 2026-07-07/);
+  });
+
+  test("a second entry the same day joins that day's block", () => {
+    withLog();
+    const args = { note: "Example Project", section: "Activity Log", date: "2026-07-07" };
+    const result = call("log_append", { ...args, content: "Follow-up scheduled." });
+    assert.equal(result.block_created, false);
+    assert.equal(result.blocks, 2);
+    const doc = read(root, PATH);
+    assert.equal(doc.match(/### 2026-07-07/g)?.length, 1);
+    assert.match(doc, /### 2026-07-07\n\n- Kickoff held\.\n- Follow-up scheduled\.\n/);
+  });
+
+  test("is idempotent — a second identical entry changes nothing", () => {
+    withLog();
+    const args = {
+      note: "Example Project",
+      section: "Activity Log",
+      content: "Proposal sent.",
+      date: "2026-08-01",
+    };
+    call("log_append", args);
+    const after = read(root, PATH);
+    const second = call("log_append", args);
+    assert.equal(second.appended, false);
+    assert.match(second.reason, /already present/);
+    assert.equal(read(root, PATH), after);
+  });
+
+  test("a back-dated entry is filed in date order, not on top", () => {
+    withLog();
+    call("log_append", {
+      note: "Example Project",
+      section: "Activity Log",
+      content: "Contract signed.",
+      date: "2026-05-01",
+    });
+    const lines = read(root, PATH).split("\n");
+    assert.ok(
+      lines.indexOf("### 2026-07-07") < lines.indexOf("### 2026-05-01"),
+      "the back-dated block must sit below the newer one",
+    );
+    assert.ok(
+      lines.indexOf("### 2026-05-01") < lines.indexOf("### 2026-04-27"),
+      "the back-dated block must sit above the older one",
+    );
+  });
+
+  test("bullets a plain line and leaves an existing marker alone", () => {
+    withLog();
+    call("log_append", {
+      note: "Example Project",
+      section: "Activity Log",
+      content: "Plain prose.\n- Already a bullet.",
+      date: "2026-08-01",
+    });
+    assert.match(read(root, PATH), /### 2026-08-01\n\n- Plain prose\.\n- Already a bullet\.\n/);
+  });
+
+  test("a missing section lists the sections that exist", () => {
+    const message = callFails("log_append", {
+      note: "Example Project",
+      section: "Activity Log",
+      content: "Proposal sent.",
+    });
+    assert.match(message, /section "Activity Log" not found/);
+    assert.match(message, /sections present: .*Key Decisions/);
+  });
+
+  test("create_section puts the log in template position and opens it with a date block", () => {
+    const result = call("log_append", {
+      note: "Example Project",
+      section: "Activity Log",
+      content: "Proposal sent.",
+      date: "2026-08-01",
+      create_section: true,
+    });
+    assert.equal(result.section_created, true);
+    const doc = read(root, PATH);
+    assert.ok(doc.indexOf("## Related Tasks") < doc.indexOf("## Activity Log"));
+    assert.ok(doc.indexOf("## Activity Log") < doc.indexOf("## Related\n"));
+    assert.match(doc, /## Activity Log\n\n### 2026-08-01\n\n- Proposal sent\.\n/);
+  });
+
+  test("a table section is refused, naming its columns and section_append", () => {
+    const message = callFails("log_append", {
+      note: "Example Project",
+      section: "Conversation Log",
+      content: "Spoke with Jane.",
+    });
+    assert.match(message, /is a table \(Date \| Who \| Summary\)/);
+    assert.match(message, /section_append/);
+  });
+
+  test("keep_newest caps the log at its newest dated blocks", () => {
+    withLog();
+    const result = call("log_append", {
+      note: "Example Project",
+      section: "Activity Log",
+      content: "Proposal sent.",
+      date: "2026-08-01",
+      keep_newest: 2,
+    });
+    assert.equal(result.dropped, 1);
+    assert.equal(result.blocks, 2);
+    // Scope to the section: the note's own `created:` frontmatter carries a
+    // date, so a substring search over the file is not evidence of absence.
+    const doc = read(root, PATH);
+    const log = doc.slice(doc.indexOf("## Activity Log"), doc.indexOf("## Related\n"));
+    assert.deepEqual(
+      log.split("\n").filter((l) => l.startsWith("### ")),
+      ["### 2026-08-01", "### 2026-07-07"],
+    );
+  });
+
+  test("leaves frontmatter byte-identical after a body edit", () => {
+    withLog();
+    const before = read(root, PATH).split("\n---\n")[0];
+    call("log_append", { note: "Example Project", section: "Activity Log", content: "Proposal sent." });
+    assert.equal(read(root, PATH).split("\n---\n")[0], before);
   });
 });

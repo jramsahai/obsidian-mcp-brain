@@ -395,6 +395,142 @@ describe("section targeting", () => {
     );
   });
 
+  /** A note whose section is nothing but `### YYYY-MM-DD` blocks. */
+  function datedLog(name: string, body: string): void {
+    mkdirSync(join(root, "Ideas"), { recursive: true });
+    writeFileSync(join(root, "Ideas", `${name}.md`), `---\ntype: idea\n---\n\n# ${name}\n\n${body}`);
+  }
+
+  test("a dated entry does not land as a bare line above the date headings", () => {
+    datedLog("Logged", "## Activity Log\n\n### 2026-07-07\n\n- Kickoff held.\n");
+    call("log_append", {
+      note: "Logged",
+      section: "Activity Log",
+      content: "Proposal sent.",
+      date: "2026-08-01",
+    });
+    const lines = read(root, "Ideas/Logged.md").split("\n");
+    assert.ok(
+      lines.indexOf("### 2026-08-01") < lines.indexOf("### 2026-07-07"),
+      "the newer block must sit above the older one",
+    );
+    const between = lines.slice(lines.indexOf("## Activity Log") + 1, lines.indexOf("### 2026-08-01"));
+    assert.ok(
+      between.every((l) => l.trim() === ""),
+      "nothing may sit between the section heading and the first date heading",
+    );
+  });
+
+  test("section_append still lands in the section's own span on a dated log", () => {
+    // The `last === -1` branch of appendToSection: on a section whose first
+    // content is a sub-heading it writes at section.start. That is the behavior
+    // log_append exists to route around, and it is deliberate here — a refactor
+    // of ownContentEnd must not move it and silently change section_append.
+    datedLog("Bare", "## Activity Log\n\n### 2026-07-07\n\n- Kickoff held.\n");
+    call("log_append", { note: "Bare", section: "Activity Log", content: "x", date: "2026-08-01" });
+    call("section_append", { note: "Bare", section: "Activity Log", content: "- stray line" });
+    const lines = read(root, "Ideas/Bare.md").split("\n");
+    assert.ok(
+      lines.indexOf("- stray line") < lines.indexOf("### 2026-08-01"),
+      "section_append still writes above the first date heading",
+    );
+  });
+
+  test("a titled date heading is not a log block", () => {
+    datedLog(
+      "Titled",
+      "## Activity Log\n\n### 2026-03-18: Comprehensive Research Initiative\n\n- An essay.\n\n### 2026-03-18 Conversation with Devon\n\n- Notes.\n",
+    );
+    call("log_append", {
+      note: "Titled",
+      section: "Activity Log",
+      content: "Proposal sent.",
+      date: "2026-03-18",
+    });
+    const doc = read(root, "Ideas/Titled.md");
+    assert.match(doc, /## Activity Log\n\n### 2026-03-18\n\n- Proposal sent\.\n/);
+    assert.match(doc, /### 2026-03-18: Comprehensive Research Initiative\n\n- An essay\./);
+    assert.match(doc, /### 2026-03-18 Conversation with Devon\n\n- Notes\./);
+  });
+
+  test("an impossible date is not a log block", () => {
+    datedLog("Impossible", "## Activity Log\n\n### 2026-02-31\n\n- Junk.\n");
+    const result = call("log_append", {
+      note: "Impossible",
+      section: "Activity Log",
+      content: "Proposal sent.",
+      date: "2026-08-01",
+    });
+    assert.equal(result.blocks, 1);
+    assert.match(read(root, "Ideas/Impossible.md"), /### 2026-02-31\n\n- Junk\./);
+  });
+
+  test("a date heading inside a code fence is not a log block", () => {
+    datedLog("Fenced", "## Activity Log\n\n```md\n### 2026-07-07\n```\n");
+    const result = call("log_append", {
+      note: "Fenced",
+      section: "Activity Log",
+      content: "Proposal sent.",
+      date: "2026-08-01",
+    });
+    assert.equal(result.blocks, 1);
+    const doc = read(root, "Ideas/Fenced.md");
+    // The fence is the section's own content, so the block goes after it —
+    // and the heading inside it is never read as a block to join.
+    assert.match(doc, /```md\n### 2026-07-07\n```\n\n### 2026-08-01\n\n- Proposal sent\.\n/);
+  });
+
+  test("section_append refuses keep_newest on a dated log", () => {
+    datedLog("Bounded", "## Review Log\n\n### 2026-07-07\n\n- Reviewed.\n");
+    const message = callFails("section_append", {
+      note: "Bounded",
+      section: "Review Log",
+      content: "- 2026-08-01: reviewed",
+      keep_newest: 2,
+    });
+    assert.match(message, /dated log/);
+    assert.match(message, /log_append/);
+    // Refused means refused: nothing was written on the way to the error.
+    assert.doesNotMatch(read(root, "Ideas/Bounded.md"), /2026-08-01/);
+  });
+
+  test("a log append leaves exactly one trailing newline", () => {
+    // The 2026-08-01 CLI fallback left a note with none at all.
+    datedLog("Unterminated", "## Activity Log\n\n### 2026-07-07\n\n- Kickoff held.");
+    call("log_append", {
+      note: "Unterminated",
+      section: "Activity Log",
+      content: "Proposal sent.",
+      date: "2026-08-01",
+    });
+    const doc = read(root, "Ideas/Unterminated.md");
+    assert.ok(doc.endsWith("\n") && !doc.endsWith("\n\n"), "exactly one trailing newline");
+  });
+
+  test("repeated log appends do not stack blank lines", () => {
+    datedLog("Stacked", "## Activity Log\n\n### 2026-07-07\n\n- Kickoff held.\n\n## Related\n");
+    for (const day of ["01", "02", "03"]) {
+      call("log_append", {
+        note: "Stacked",
+        section: "Activity Log",
+        content: `Day ${day}.`,
+        date: `2026-08-${day}`,
+      });
+    }
+    assert.doesNotMatch(read(root, "Ideas/Stacked.md"), /\n\n\n/);
+  });
+
+  test("a heading passed as log content is refused", () => {
+    datedLog("Heady", "## Activity Log\n\n### 2026-07-07\n\n- Kickoff held.\n");
+    const message = callFails("log_append", {
+      note: "Heady",
+      section: "Activity Log",
+      content: "### 2026-08-01\n\n- Proposal sent.",
+    });
+    assert.match(message, /contains a heading/);
+    assert.match(message, /the date heading is written for you/);
+  });
+
   test("keep_newest caps a bounded log at the newest entries", () => {
     call("note_create", { type: "index", name: "Knowledge Base" });
     for (const day of ["01", "02", "03", "04"]) {

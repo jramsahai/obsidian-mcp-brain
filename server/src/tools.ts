@@ -28,9 +28,11 @@ import {
   spendRelateBudget,
 } from "./relate.ts";
 import {
+  appendDatedEntry,
   appendToSection,
   findSection,
   insertSection,
+  isDatedLog,
   listSections,
   normalizeHeading,
   requireSection,
@@ -526,6 +528,20 @@ const sectionAppend: ToolDef = {
       created = true;
     }
 
+    // keep_newest counts entries, and on a dated log the entries are
+    // `### YYYY-MM-DD` blocks — which this tool does not write. Trimming here
+    // would delete whole days while the bare line it just added above them goes
+    // uncounted. It has silently done nothing since it shipped; say so rather
+    // than start deleting.
+    if (keepNewest !== undefined) {
+      const target = findSection(working, sectionName);
+      if (target && isDatedLog(working, target)) {
+        throw new ToolError(
+          `section "${sectionName}" in ${note.path} is a dated log of "### YYYY-MM-DD" blocks, where keep_newest counts nothing. Use log_append, which writes the date heading and caps the log by block.`,
+        );
+      }
+    }
+
     const result = appendToSection(working, sectionName, content, {
       dedupe,
       keepNewest,
@@ -541,6 +557,94 @@ const sectionAppend: ToolDef = {
       appended: result.changed,
       section_created: created,
       as_table_row: result.asTableRow,
+    };
+  },
+};
+
+const logAppend: ToolDef = {
+  name: "log_append",
+  description:
+    "Add a dated entry to a running log section — a project note's Activity Log, an index note's Review Log. The server writes the \"### YYYY-MM-DD\" heading itself and keeps the newest date at the top; a second entry the same day joins that day's block instead of starting another, and an identical entry is skipped, so re-running is safe. Use this for any section built from dated blocks: section_append on one drops a bare line above the first date heading, which is not an entry, is not where a reader looks, and is never counted by keep_newest. Pass the entry text only — no date prefix, no heading, no bullet marker; a plain line is bulleted for you.",
+  inputSchema: {
+    type: "object",
+    properties: {
+      note: { type: "string", description: "Note name or vault-relative path." },
+      section: {
+        type: "string",
+        description:
+          'The log heading, e.g. "Activity Log" on a project note or "Review Log" on an index note.',
+      },
+      content: {
+        type: "string",
+        description:
+          "The entry. One line, or several lines for several bullets. No date prefix and no heading — the server writes the date heading.",
+      },
+      date: {
+        type: "string",
+        description:
+          "YYYY-MM-DD for the entry's block. Defaults to today in the vault's timezone. A back-dated entry is filed in date order, not on top.",
+      },
+      dedupe: {
+        type: "boolean",
+        description: "Skip lines already present in that day's block. Default true.",
+      },
+      create_section: {
+        type: "boolean",
+        description: "Create the log section if it does not exist, in template position. Default false.",
+      },
+      keep_newest: {
+        type: "number",
+        minimum: 1,
+        description:
+          "Cap the log at this many dated blocks, dropping the oldest by date. For a bounded log like a review log. Omit to keep everything — a project's activity log is history and should grow.",
+      },
+    },
+    required: ["note", "section", "content"],
+    additionalProperties: false,
+  },
+  handler: (args) => {
+    const ref = req(args, "note");
+    const sectionName = normalizeHeading(req(args, "section"));
+    const content = req(args, "content");
+    const dedupe = bool(args, "dedupe") ?? true;
+    const create = bool(args, "create_section") ?? false;
+    const date = str(args, "date") ? assertDate(req(args, "date"), "date") : today();
+    const keepNewest = num(args, "keep_newest");
+    if (keepNewest !== undefined && (!Number.isInteger(keepNewest) || keepNewest < 1)) {
+      throw new ToolError(`keep_newest must be a whole number of at least 1; got ${keepNewest}.`);
+    }
+
+    const note = resolveWritable(ref);
+    const current = readNote(note);
+    let working = current.content;
+    let created = false;
+
+    if (!findSection(working, sectionName)) {
+      if (!create) requireSection(working, sectionName, note.path);
+      working = insertSection(working, sectionName, templateOrder(note));
+      created = true;
+    }
+
+    const result = appendDatedEntry(working, sectionName, date, content, {
+      dedupe,
+      keepNewest,
+      notePath: note.path,
+    });
+    // `created` is tracked separately so a deduped entry cannot swallow a
+    // section this call just created.
+    if (!result.changed && !created) {
+      return { path: note.path, section: sectionName, date, appended: false, reason: result.reason };
+    }
+    writeNoteGuarded(note.path, current.mtimeMs, result.content);
+    return {
+      path: note.path,
+      section: sectionName,
+      date,
+      appended: result.changed,
+      block_created: result.blockCreated,
+      section_created: created,
+      blocks: result.blocks,
+      dropped: result.dropped,
     };
   },
 };
@@ -1578,6 +1682,7 @@ export const TOOLS: ToolDef[] = [
   vaultLinks,
   noteCreate,
   sectionAppend,
+  logAppend,
   taskAdd,
   taskUpdate,
   dailyLog,

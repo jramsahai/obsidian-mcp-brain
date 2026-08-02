@@ -31,6 +31,6 @@ template: true
 
 ## Related Tasks
 
-## Related
-
 ## Activity Log
+
+## Related

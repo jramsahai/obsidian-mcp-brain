@@ -96,6 +96,7 @@ export function buildNote(spec: CreateSpec): CreatedNote {
           "Conversation Log|Date,Who,Summary",
           "Waiting On|What,Who,Since",
           "Related Tasks",
+          "Activity Log",
           "Related",
         ],
         fields,

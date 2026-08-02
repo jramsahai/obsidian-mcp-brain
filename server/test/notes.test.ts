@@ -189,6 +189,7 @@ describe("note_create bodies", () => {
       "Conversation Log",
       "Waiting On",
       "Related Tasks",
+      "Activity Log",
       "Related",
     ]);
   });
