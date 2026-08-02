@@ -1,4 +1,4 @@
-import { assertDate, config, localTimestamp, ToolError, today } from "./config.ts";
+import { assertDate, config, localTimestamp, modifiedOn, ToolError, today } from "./config.ts";
 import { setChecklistItem } from "./checklist.ts";
 import { parseNote } from "./frontmatter.ts";
 import {
@@ -280,8 +280,7 @@ const vaultList: ToolDef = {
     }
     if (changedSince) {
       assertDate(changedSince, "changed_since");
-      const cutoff = new Date(`${changedSince}T00:00:00`).getTime();
-      notes = notes.filter((n) => n.mtimeMs >= cutoff);
+      notes = notes.filter((n) => modifiedOn(n.mtimeMs) >= changedSince);
     }
     if (latest) {
       const newest = [...notes].sort((a, b) => a.title.localeCompare(b.title)).pop();
@@ -294,7 +293,7 @@ const vaultList: ToolDef = {
         title: n.title,
         type: n.type,
         status: n.status,
-        modified: new Date(n.mtimeMs).toISOString().slice(0, 10),
+        modified: modifiedOn(n.mtimeMs),
       })),
     };
   },
@@ -1415,8 +1414,7 @@ const linkify: ToolDef = {
     let targets = ref ? [resolveNote(ref)] : getIndex().notes;
     if (!ref && since) {
       assertDate(since, "since");
-      const cutoff = new Date(`${since}T00:00:00`).getTime();
-      targets = targets.filter((n) => n.mtimeMs >= cutoff);
+      targets = targets.filter((n) => modifiedOn(n.mtimeMs) >= since);
     }
 
     const entities = buildEntities();

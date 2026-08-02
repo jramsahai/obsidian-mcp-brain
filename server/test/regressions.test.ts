@@ -1,8 +1,8 @@
 import assert from "node:assert/strict";
-import { chmodSync, existsSync, mkdirSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, utimesSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, test } from "node:test";
-import { assertDate } from "../src/config.ts";
+import { assertDate, config, setConfig } from "../src/config.ts";
 import { parseNote } from "../src/frontmatter.ts";
 import { buildEntities } from "../src/linkify.ts";
 import { NOTE_TYPES } from "../src/notes.ts";
@@ -343,6 +343,68 @@ describe("note round-trip", () => {
 
   test("every note type is creatable and lands where the schema says", () => {
     assert.equal(NOTE_TYPES.length, 11);
+  });
+});
+
+describe("dates in the vault's timezone", () => {
+  // 2026-08-01 21:00 EDT is 2026-08-02 01:00 UTC. Every evening after 20:00
+  // local, a UTC-formatted mtime reports tomorrow's date.
+  const EVENING = new Date("2026-08-02T01:00:00Z");
+  const LOCAL_DATE = "2026-08-01";
+  const PATH = "Projects/Example Project/Example Project.md";
+
+  function touched(): void {
+    const file = join(root, PATH);
+    utimesSync(file, EVENING, EVENING);
+  }
+
+  test("modified is the local date, not the UTC one", () => {
+    touched();
+    const note = call("vault_list", { type: "project" }).notes.find((n: any) => n.path === PATH);
+    assert.equal(
+      note.modified,
+      LOCAL_DATE,
+      "a note edited at 21:00 EDT must not report as modified tomorrow",
+    );
+  });
+
+  test("a note touched now reports today, agreeing with vault_status", () => {
+    // The real contradiction: `modified` was UTC-formatted while `today` runs
+    // through the vault's timezone, so after 20:00 EDT the model was told a
+    // note it had just written was modified tomorrow. Uses the wall clock
+    // deliberately — this is the assertion that failed every evening.
+    const now = new Date();
+    utimesSync(join(root, PATH), now, now);
+    const note = call("vault_list", { type: "project" }).notes.find((n: any) => n.path === PATH);
+    assert.equal(note.modified, call("vault_status", {}).today);
+  });
+
+  test("changed_since includes a note modified on that local date", () => {
+    // The cutoff used to be a host-timezone midnight epoch, so it disagreed
+    // with the very `modified` value it sat next to.
+    touched();
+    const paths = call("vault_list", { changed_since: LOCAL_DATE }).notes.map((n: any) => n.path);
+    assert.ok(paths.includes(PATH), "the note's own modified date must not be excluded");
+  });
+
+  test("changed_since excludes a note modified the day before", () => {
+    touched();
+    const paths = call("vault_list", { changed_since: "2026-08-02" }).notes.map((n: any) => n.path);
+    assert.ok(!paths.includes(PATH), "a 2026-08-01 note is not changed since 2026-08-02");
+  });
+
+  test("changed_since follows VAULT_TZ, not the machine's timezone", () => {
+    // The cutoff was `new Date("<date>T00:00:00")`, which parses as *host*
+    // midnight. That was invisible here only because the host and the vault
+    // are both America/New_York. Under Asia/Tokyo the same instant is already
+    // 2026-08-02, and the host-parsed cutoff wrongly excluded it.
+    setConfig({ ...config(), timezone: "Asia/Tokyo" });
+    touched();
+    const paths = call("vault_list", { changed_since: "2026-08-02" }).notes.map((n: any) => n.path);
+    assert.ok(
+      paths.includes(PATH),
+      "01:00 UTC is 10:00 on 2026-08-02 in Tokyo, so the note is changed since that date",
+    );
   });
 });
 

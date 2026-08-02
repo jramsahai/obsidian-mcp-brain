@@ -50,6 +50,18 @@ export function formatDate(when: Date, timezone: string): string {
   return `${get("year")}-${get("month")}-${get("day")}`;
 }
 
+/**
+ * A file's mtime as a YYYY-MM-DD date in the vault's timezone — the only date a
+ * caller should ever see for it. Formatting mtime with toISOString() reports a
+ * note edited at 20:00 EDT as modified tomorrow, contradicting vault_status's
+ * `today` in the same breath; comparing raw epochs against a host-parsed
+ * midnight breaks the moment the host timezone and VAULT_TZ differ. ISO dates
+ * compare lexically, so filtering needs no epoch math at all.
+ */
+export function modifiedOn(mtimeMs: number, cfg: Config = config()): string {
+  return formatDate(new Date(mtimeMs), cfg.timezone);
+}
+
 /** Current local time as HH:mm for timestamped output. */
 export function localTime(cfg: Config = config(), now: Date = new Date()): string {
   return new Intl.DateTimeFormat("en-GB", {
