@@ -13,9 +13,7 @@ Use this skill as the shared Obsidian/vault coordination layer. Keep workflow-sp
 
 ## Vault
 
-- Vault name: `Obsidian Vault`
-- Vault path: `/Users/you/Documents/Obsidian Vault`
-- Local timezone: `America/New_York`
+- The vault path and local timezone are the server's configuration (`OBSIDIAN_VAULT`, `VAULT_TZ`), not this file's. Never assume either; `obsidian__vault_status` reports today's date in the vault's timezone.
 - The vault is a git repository (branch `main`). Git is the recovery mechanism for machine edits; automated passes snapshot before and after with `obsidian__vault_snapshot`.
 
 All vault work goes through the `obsidian__*` tools. They talk to the vault filesystem directly — the Obsidian app does not need to be running, and no shell command is involved. Never shell out for vault work: not to a command-line vault client, not to `git`, `cat`, or `ls`. Those paths are gone, and the tools cover what they did.

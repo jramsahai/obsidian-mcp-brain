@@ -9,7 +9,8 @@
     "clean, because nothing was checking.",
     "Delivery targets (channel/recipient) are deliberately NOT stored here - they are",
     "personal contact details, and they are not prose the model reads.",
-    "Apply with: openclaw cron edit <id> --message '<message>' --tools '<tools>'"
+    "Replace <skills-dir> with the absolute path of this checkout and <...-job-id> with the ids",
+    "from `openclaw cron list`, then apply with: openclaw cron edit <id> --message '<message>' --tools '<tools>'"
   ],
   "jobs": [
     {
@@ -39,7 +40,7 @@
         "memory_get",
         "obsidian__*"
       ],
-      "message": "Run the user's daily standup by following the standup skill exactly — it is the authoritative workflow: data sources, reconciliation rules, staleness only from dated evidence, standup shape, and the Standup.md update. Read the skill first at /Users/you/.openclaw/workspace/skills/standup/SKILL.md, and the shared conventions at /Users/you/.openclaw/workspace/skills/second-brain/SKILL.md. All vault access is the obsidian__* MCP tools — there is no CLI and no shell fallback; if a tool errors, its message names the fix, so act on it or report plainly rather than finding another way in. Vault 'Obsidian Vault' at ~/Documents/Obsidian Vault/. Deliver the concise standup to this channel. Read-mostly: write only Standup.md, via obsidian__standup_write; do not mutate task or project state. If this message and the skill ever disagree, the skill wins."
+      "message": "Run the user's daily standup by following the standup skill exactly — it is the authoritative workflow: data sources, reconciliation rules, staleness only from dated evidence, standup shape, and the Standup.md update. Read the skill first at <skills-dir>/standup/SKILL.md, and the shared conventions at <skills-dir>/second-brain/SKILL.md. All vault access is the obsidian__* MCP tools — there is no CLI and no shell fallback; if a tool errors, its message names the fix, so act on it or report plainly rather than finding another way in. Vault 'Obsidian Vault' at ~/Documents/Obsidian Vault/. Deliver the concise standup to this channel. Read-mostly: write only Standup.md, via obsidian__standup_write; do not mutate task or project state. If this message and the skill ever disagree, the skill wins."
     },
     {
       "id": "<consolidation-job-id>",
@@ -68,7 +69,7 @@
         "memory_get",
         "obsidian__*"
       ],
-      "message": "Run the nightly consolidation pass for the user's Obsidian second brain by following the nightly-consolidation skill exactly — it is the authoritative workflow: git snapshots around writes, change window from the newest Syntheses/ note, inbox routing as write-to-destination-then-remove, entity wikilinking limits and exclusion zones, idempotent re-runs, Related links with one-line reasons, MOC upkeep, and a synthesis note only when there is something real to say. Read the skill first at /Users/you/.openclaw/workspace/skills/nightly-consolidation/SKILL.md, the shared Edit Policy at /Users/you/.openclaw/workspace/skills/second-brain/SKILL.md, and the KB review steps at /Users/you/.openclaw/workspace/skills/knowledge-base/SKILL.md. All vault access is the obsidian__* MCP tools — there is no CLI and no shell fallback; if a tool errors, its message names the fix, so act on it or report plainly rather than finding another way in. Vault 'Obsidian Vault' at ~/Documents/Obsidian Vault/. Reply with a concise summary: items routed, links added, observations, candidates, and anything that failed or was skipped. If this message and the skill ever disagree, the skill wins."
+      "message": "Run the nightly consolidation pass for the user's Obsidian second brain by following the nightly-consolidation skill exactly — it is the authoritative workflow: git snapshots around writes, change window from the newest Syntheses/ note, inbox routing as write-to-destination-then-remove, entity wikilinking limits and exclusion zones, idempotent re-runs, Related links with one-line reasons, MOC upkeep, and a synthesis note only when there is something real to say. Read the skill first at <skills-dir>/nightly-consolidation/SKILL.md, the shared Edit Policy at <skills-dir>/second-brain/SKILL.md, and the KB review steps at <skills-dir>/knowledge-base/SKILL.md. All vault access is the obsidian__* MCP tools — there is no CLI and no shell fallback; if a tool errors, its message names the fix, so act on it or report plainly rather than finding another way in. Vault 'Obsidian Vault' at ~/Documents/Obsidian Vault/. Reply with a concise summary: items routed, links added, observations, candidates, and anything that failed or was skipped. If this message and the skill ever disagree, the skill wins."
     }
   ]
 }

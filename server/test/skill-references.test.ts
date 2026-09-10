@@ -201,7 +201,9 @@ describe("cron job prompts", () => {
       const paths = job.message.match(/\S+\/SKILL\.md/g) ?? [];
       assert.ok(paths.length > 0, `${job.name} names no SKILL.md path`);
       for (const p of paths) {
-        assert.ok(existsSync(p), `${job.name} points at a missing skill file: ${p}`);
+        // The shipped file uses a <skills-dir> placeholder for this checkout's path.
+        const resolved = p.replace("<skills-dir>", SKILLS_DIR);
+        assert.ok(existsSync(resolved), `${job.name} points at a missing skill file: ${p}`);
       }
     }
   });

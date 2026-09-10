@@ -54,7 +54,7 @@ The split is deliberate, and it is **mechanism vs. judgment, not safety vs. risk
 
    If the harness gates tool access by an allowlist, allow `obsidian__*`, and drop shell/file-write tools for the agent that runs these skills — the tools cover what they did, and leaving them enabled reintroduces the unguarded writes this design exists to prevent.
 
-3. Update the **Vault** block of `second-brain/SKILL.md` with your vault path and timezone. That block is the single source of truth for the skills; the server reads its own config from the environment above.
+3. The skills carry no vault path or timezone of their own: the environment above is the single source of truth, and the tools report the date and vault state to the model.
 
 4. Optional: schedule `nightly-consolidation` (e.g. nightly cron) and `standup` (e.g. weekday mornings) in your harness. `cron/jobs.json` holds the prompts and tool allowlists both jobs run with — a scheduled prompt is prose the model obeys exactly like a skill, so it is version-controlled and linted alongside them. Delivery targets are not stored there.
 
