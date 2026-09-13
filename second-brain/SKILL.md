@@ -25,6 +25,7 @@ Call `obsidian__vault_status` first in any scheduled or exploratory run. It answ
 | Need | Tool |
 |---|---|
 | Orientation, today's date, git state | `obsidian__vault_status` |
+| Resolve a relative date ("next friday", "end of month") to an exact one | `obsidian__date_resolve` |
 | Find notes by type, folder, status, or change date | `obsidian__vault_list` |
 | Read a note or one of its sections | `obsidian__vault_read` |
 | Full-text search | `obsidian__vault_search` |
@@ -46,10 +47,11 @@ Call `obsidian__vault_status` first in any scheduled or exploratory run. It answ
 | Regenerate `Standup.md` | `obsidian__standup_write` |
 | Commit the vault | `obsidian__vault_snapshot` |
 
-Two rules matter more than the rest:
+Three rules matter more than the rest:
 
 - **Never construct a file path.** `obsidian__vault_read` takes the note name as it appears in a wikilink — `Wayfinder`, `First Last` — and resolves the path itself. Passing a path you assembled by hand is how notes end up in the wrong place.
 - **An empty result is the answer.** No search hits, an empty listing, or a missing daily note means the content does not exist. Do not re-check it another way; move on.
+- **Never hand-compute a date from a relative phrase.** "Next friday" and "end of the month" are exactly the arithmetic a model gets subtly wrong in a way nobody notices until a due date is missed. Call `obsidian__date_resolve` and pass its `date` to whatever tool needs one.
 
 Never write a vault file with the native file write/edit tools. `obsidian__note_create` derives the path, emits the frontmatter, and lays out the sections; `obsidian__section_append` fills them in.
 

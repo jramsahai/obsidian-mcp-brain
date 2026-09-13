@@ -27,7 +27,7 @@ Material from the voice bridge needs cleanup before anything is written, not lit
 
 - It arrives lowercase and unpunctuated. Never paste it into a note as-is — summarize into normal sentences and title case where a heading or wikilink needs it.
 - Names are frequently misheard ("alex riviera" for an existing "Alex Rivera", or a name with no match at all). Treat a heard name as a candidate, not a fact — confirm it against the vault before writing anything under it.
-- Dates are relative ("next friday", "end of month"). Call `obsidian__vault_status` first in every capture and resolve every relative date against its `today` field to `YYYY-MM-DD` before any `obsidian__task_add` — the tool rejects anything else, and an unresolved "next friday" is not a valid `due`.
+- Dates are relative ("next friday", "end of month"). Call `obsidian__vault_status` first in every capture for orientation, then `obsidian__date_resolve` for each relative date and pass its `date` to `obsidian__task_add` — the tool rejects anything else, and an unresolved "next friday" is not a valid `due`.
 
 ## Workflow
 
@@ -59,10 +59,11 @@ Material from the voice bridge needs cleanup before anything is written, not lit
    obsidian__section_append note="Example Project" section="Key Decisions" content="| 2026-08-03 | Delay launch by one week | Accommodate legal review |"
    ```
 
-7. **Route action items to tasks.** One `obsidian__task_add` per concrete action item, with the project wikilink and a due date only when one was actually stated — an unclear date goes in `notes`, never invented. When the item is owed *to* the user by someone present, use `waiting_on` with their resolved person name:
+7. **Route action items to tasks.** One `obsidian__task_add` per concrete action item, with the project wikilink and a due date only when one was actually stated — resolve a stated relative date with `obsidian__date_resolve` first and pass its `date`; an unclear date goes in `notes`, never invented. When the item is owed *to* the user by someone present, use `waiting_on` with their resolved person name:
 
    ```
    obsidian__task_add text="Send the vendor quote" project="Example Project" notes="Alex Rivera (name unconfirmed)"
+   obsidian__date_resolve expression="next friday"
    obsidian__task_add text="Review the contract" project="Example Project" due="2026-08-07" waiting_on="Jane Doe"
    ```
 
@@ -83,10 +84,11 @@ Dictated recap (voice bridge, as received):
 
 > "recap of the example project sync today with jane doe and a guy named alex riviera we decided to delay the launch by one week to accommodate legal review alex is going to send the vendor quote no date given jane is going to review the contract by next friday open question is whether legal needs to sign off before we send it"
 
-`obsidian__vault_status` reports `today: "2026-08-03"`, so "next friday" resolves to `2026-08-07`.
+`obsidian__vault_status` reports `today: "2026-08-03"`; `obsidian__date_resolve expression="next friday"` resolves that to `2026-08-07`.
 
 ```
 obsidian__vault_status
+obsidian__date_resolve expression="next friday"
 obsidian__vault_list type="project"
 obsidian__vault_list type="person"
 obsidian__vault_search query="alex" type="person"

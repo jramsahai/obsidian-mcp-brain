@@ -69,10 +69,17 @@ obsidian__task_update match="revised proposal" due="2026-08-06" priority="medium
 
 ## Due Dates and Waiting States
 
-- Resolve relative dates ("friday", "end of month") against the vault's local timezone before calling; the tools take exact `YYYY-MM-DD` and refuse anything else, including impossible dates like `2026-02-31`.
+- Resolve relative dates ("friday", "end of month") with `obsidian__date_resolve` before calling; pass its `date`. The tools take exact `YYYY-MM-DD` and refuse anything else, including impossible dates like `2026-02-31`.
 - Tasks needing the user's action go in `Active`, or `Waiting On Me` when the user owes it to someone specific.
 - Tasks blocked by someone else go in `Waiting On Others` via `waiting_on`.
 - Preserve an unclear date in `notes` rather than inventing one.
+
+For example, from a `vault_status` `today` of `2026-08-01`:
+
+```
+obsidian__date_resolve expression="next friday"
+obsidian__task_add text="Send the revised proposal" project="Wayfinder" due="2026-08-07"
+```
 
 ## Nudging Logic
 

@@ -81,6 +81,12 @@ When logging a conversation:
 - Use `## Pending Topics` for things the user wants to discuss with a person later. Add one with `obsidian__checklist_set note="First Last" section="Pending Topics" item="…"`.
 - Mark a topic handled with the same call plus `checked=true`, and only when the user says it was handled. Nothing removes the line — a checked topic is the record that it happened.
 - If a pending topic is tied to a project, include the `[[Project Name]]` wikilink in the topic text.
+- If a topic carries a relative date ("before end of month"), resolve it with `obsidian__date_resolve` and write the exact date into the topic text — a relative phrase left in stored text is ambiguous to whoever reads it back later:
+
+```
+obsidian__date_resolve expression="end of month"
+obsidian__checklist_set note="Jane Doe" section="Pending Topics" item="Follow up about the raise by 2026-08-31"
+```
 
 ## Relationship to Projects and Tasks
 
