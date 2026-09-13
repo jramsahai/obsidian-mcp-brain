@@ -41,6 +41,7 @@ Call `obsidian__vault_status` first in any scheduled or exploratory run. It answ
 | Log a correction the user made | `obsidian__correction_log` |
 | See correction counts and patterns | `obsidian__corrections_summary` |
 | Capture a line into the inbox | `obsidian__inbox_add` |
+| Reject rate, similarity calibration, corrections, and recently ignored links in one call | `obsidian__vault_signals` |
 | Move an item out of an inbox | `obsidian__inbox_route` |
 | Drop an inbox line already captured elsewhere | `obsidian__inbox_clear` |
 | Change one frontmatter field | `obsidian__note_set_field` |

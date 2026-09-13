@@ -62,6 +62,14 @@ export function modifiedOn(mtimeMs: number, cfg: Config = config()): string {
   return formatDate(new Date(mtimeMs), cfg.timezone);
 }
 
+/**
+ * A YYYY-MM-DD date `days` days before now, in the vault's timezone — for a
+ * tool default like "30 days back" without the caller doing date math.
+ */
+export function daysAgo(days: number, cfg: Config = config(), now: Date = new Date()): string {
+  return formatDate(new Date(now.getTime() - days * 86_400_000), cfg.timezone);
+}
+
 /** Current local time as HH:mm for timestamped output. */
 export function localTime(cfg: Config = config(), now: Date = new Date()): string {
   return new Intl.DateTimeFormat("en-GB", {

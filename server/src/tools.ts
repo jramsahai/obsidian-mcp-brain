@@ -1,10 +1,23 @@
-import { addDays, assertDate, config, daysBefore, localTimestamp, modifiedOn, today, ToolError } from "./config.ts";
+import {
+  addDays,
+  assertDate,
+  type Config,
+  config,
+  daysAgo,
+  daysBefore,
+  localTimestamp,
+  modifiedOn,
+  setConfig,
+  today,
+  ToolError,
+} from "./config.ts";
 import { setChecklistItem } from "./checklist.ts";
 import {
   CORRECTIONS_FILE,
   CORRECTIONS_SECTION,
   correctionRows,
   ensureCorrectionsLog,
+  summarizeCorrections,
 } from "./corrections.ts";
 import { parseNote } from "./frontmatter.ts";
 import {
@@ -28,6 +41,7 @@ import {
   SETTABLE_FIELDS,
   type NoteType,
 } from "./notes.ts";
+import { computeRejectRate, REJECT_WINDOW_DAYS } from "./reject-rate.ts";
 import {
   RELATE_CAP,
   RELATED_SECTION,
@@ -47,6 +61,7 @@ import {
   removeDatedEntries,
   requireSection,
 } from "./sections.ts";
+import { excerpt } from "./similar.ts";
 import {
   composeTaskLine,
   findDuplicate,
@@ -65,6 +80,7 @@ import {
   clearWrittenPaths,
   findNote,
   getIndex,
+  invalidateIndex,
   isTemplate,
   nearestTitles,
   readNote,
@@ -2099,38 +2115,105 @@ const correctionsSummary: ToolDef = {
   handler: (args) => {
     const since = str(args, "since") ? assertDate(req(args, "since"), "since") : undefined;
     const skill = str(args, "skill");
+    return summarizeCorrections(correctionRows(), { since, skill });
+  },
+};
 
-    let rows = correctionRows();
-    if (since) rows = rows.filter((r) => r.date >= since);
-    if (skill) rows = rows.filter((r) => r.skill.toLowerCase() === skill.toLowerCase());
+function windowDaysArg(args: Record<string, unknown>): number | undefined {
+  const value = num(args, "window_days");
+  if (value !== undefined && (!Number.isInteger(value) || value < 1)) {
+    throw new ToolError(`window_days must be a whole number of at least 1; got ${value}.`);
+  }
+  return value;
+}
 
-    const bySkill = new Map<
-      string,
-      { count: number; last_date: string; rules: Map<string, number> }
-    >();
-    for (const row of rows) {
-      const entry = bySkill.get(row.skill) ?? { count: 0, last_date: row.date, rules: new Map() };
-      entry.count++;
-      if (row.date > entry.last_date) entry.last_date = row.date;
-      if (row.rule) entry.rules.set(row.rule, (entry.rules.get(row.rule) ?? 0) + 1);
-      bySkill.set(row.skill, entry);
+/**
+ * Why reject-rate is unavailable, in a sentence naming the fix — or null when
+ * `computeRejectRate` can actually run. Distinct from `gitDiagnosis()`, which
+ * only distinguishes "disabled" from "working" and folds both into null.
+ */
+function rejectRateUnavailable(cfg: Config): string | null {
+  if (!cfg.gitEnabled) {
+    return "git is disabled; set VAULT_GIT=1 in the server env to enable reject-rate measurement.";
+  }
+  return gitDiagnosis();
+}
+
+const vaultSignals: ToolDef = {
+  name: "vault_signals",
+  description:
+    "Read-only measurements for the monthly skill-tuning pass, in one call the agent can act on without a shell: reject_rate (added/rejected/rate for machine commits, by line kind, top 5 files), calibration (similarity pair counts, threshold, pairs at or above it, the gap under it, and the highest-scoring pair's texts), corrections (corrections_summary's own shape), and ignored_links (rows added to Ignored Links.md since the window started). since (default 30 days before today) filters reject_rate, corrections, and ignored_links; window_days (default 14) is the reject-rate rejection window. reject_rate is null with reject_rate_unavailable naming the fix when git is disabled or the vault is not a git repo — the other three sections still populate.",
+  inputSchema: {
+    type: "object",
+    properties: {
+      since: { type: "string", description: "YYYY-MM-DD. Defaults to 30 days before today." },
+      window_days: {
+        type: "number",
+        description: `Reject-rate rejection window in days. Defaults to ${REJECT_WINDOW_DAYS}.`,
+      },
+    },
+    additionalProperties: false,
+  },
+  handler: (args) => {
+    const started = Date.now();
+    const cfg = config();
+    const since = str(args, "since") ? assertDate(req(args, "since"), "since") : daysAgo(30, cfg);
+    const windowDays = windowDaysArg(args);
+
+    let reject_rate: Record<string, unknown> | null = null;
+    const reject_rate_unavailable = rejectRateUnavailable(cfg);
+    if (!reject_rate_unavailable) {
+      const report = computeRejectRate(cfg.vaultRoot, { since, windowDays, gitBinary: cfg.gitBinary });
+      reject_rate = {
+        machine_commits: report.machineCommits,
+        added: report.overall.added,
+        rejected: report.overall.rejected,
+        rate: report.overall.rate,
+        by_category: report.byCategory,
+        top_files: report.topFiles,
+      };
     }
 
-    const by_skill = [...bySkill.entries()]
-      .map(([skillName, entry]) => ({
-        skill: skillName,
-        count: entry.count,
-        last_date: entry.last_date,
-        rules: [...entry.rules.entries()]
-          .map(([rule, count]) => ({ rule, count }))
-          .sort((a, b) => b.count - a.count),
-      }))
-      .sort((a, b) => b.count - a.count);
+    // computeCalibration takes over the process-wide config while it runs
+    // (it scores the whole vault standalone, the way the npm script does), so
+    // restore this server's real config right after — otherwise every tool
+    // call for the rest of this process would see git as disabled and the
+    // wrong timezone.
+    const calibrationReport = computeCalibration(cfg.vaultRoot, { timezone: cfg.timezone });
+    setConfig(cfg);
+    invalidateIndex();
+
+    const calibration = {
+      pairs_scored: calibrationReport.pairsScored,
+      threshold: calibrationReport.threshold,
+      above_threshold: calibrationReport.aboveThreshold,
+      highest_under_threshold: calibrationReport.topGenuinePair?.score ?? null,
+      gap_to_threshold: calibrationReport.gapToThreshold,
+      top_pair: calibrationReport.topPair
+        ? {
+            file: calibrationReport.topPair.file,
+            group: calibrationReport.topPair.group,
+            score: calibrationReport.topPair.score,
+            a: excerpt(calibrationReport.topPair.a, 80),
+            b: excerpt(calibrationReport.topPair.b, 80),
+          }
+        : null,
+    };
+
+    const corrections = summarizeCorrections(correctionRows(), { since });
+
+    const ignoredSince = ignoredRows().filter((r) => r.since >= since);
+    const ignored_links = { count: ignoredSince.length, rows: ignoredSince };
 
     return {
-      total: rows.length,
-      by_skill,
-      recent: rows.slice(-5).reverse(),
+      since,
+      window_days: windowDays ?? REJECT_WINDOW_DAYS,
+      reject_rate,
+      reject_rate_unavailable,
+      calibration,
+      corrections,
+      ignored_links,
+      elapsed_ms: Date.now() - started,
     };
   },
 };
@@ -2154,6 +2237,7 @@ export const TOOLS: ToolDef[] = [
   linkIgnore,
   correctionLog,
   correctionsSummary,
+  vaultSignals,
   inboxRoute,
   linkify,
   noteSetField,
