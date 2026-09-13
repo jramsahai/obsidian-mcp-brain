@@ -12,6 +12,7 @@ This repo is the core of a larger setup — a vault, an agent, and optionally a 
 | `project-tracking` | Project notes: status, decisions, blockers, docs, task links. |
 | `task-tracking` | Centralized checkbox tasks in `Tasks.md` with due dates, priorities, waiting states, and project wikilinks. |
 | `people-notes` | Durable per-person notes: conversations, pending topics, project associations. |
+| `meeting-notes` | Ingests a meeting transcript, dictated recap, or bullet notes into a meeting note, project decisions, tasks, and people-note history. |
 | `daily-journal` | Lightweight daily notes without turning journaling into project management. |
 | `knowledge-base` | Evergreen reference notes: facts, how-tos, captured articles/videos. |
 | `shopping-list` | Per-store shopping lists (`Shopping/[Store].md`). |
