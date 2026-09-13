@@ -1,0 +1,26 @@
+{
+  "name": "vault-recall-read-only",
+  "skills": ["vault-recall"],
+  "user": "What do I know about Jane Doe?",
+  "expect_calls": [
+    { "tool": "vault_read", "args": { "note": "/Jane Doe/i" } }
+  ],
+  "forbid_calls": [
+    "note_create",
+    "section_append",
+    "log_append",
+    "log_remove",
+    "task_add",
+    "task_update",
+    "daily_log",
+    "checklist_set",
+    "relate",
+    "link_ignore",
+    "inbox_route",
+    "linkify",
+    "note_set_field",
+    "standup_write",
+    "inbox_clear",
+    "vault_snapshot"
+  ]
+}

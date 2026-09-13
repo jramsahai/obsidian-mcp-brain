@@ -1,0 +1,9 @@
+{
+  "name": "project-meeting-note",
+  "skills": ["project-tracking"],
+  "today": "2026-08-10",
+  "user": "I had a meeting with Jane Doe today about Example Project — we're on track, no blockers.",
+  "expect_calls": [
+    { "tool": "note_create", "args": { "type": "meeting", "project": "Example Project" } }
+  ]
+}

@@ -1,0 +1,16 @@
+{
+  "name": "duplicate-task-not-duplicated",
+  "skills": ["task-tracking"],
+  "user": "Add a task to review the pricing model for Example Project.",
+  "expect_calls": [
+    { "tool": "task_add", "args": { "text": "/pricing model/i" } }
+  ],
+  "expect_files": [
+    {
+      "path": "Tasks.md",
+      "matches": [
+        "/^(?:(?!Review the pricing model).)*Review the pricing model(?:(?!Review the pricing model).)*$/s"
+      ]
+    }
+  ]
+}

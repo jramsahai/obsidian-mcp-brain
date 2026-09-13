@@ -1,0 +1,9 @@
+{
+  "name": "task-waiting-on-other",
+  "skills": ["task-tracking"],
+  "today": "2026-08-10",
+  "user": "Jane Doe is going to send me the signed contract — I'm waiting on her for that.",
+  "expect_calls": [
+    { "tool": "task_add", "args": { "text": "/contract/i", "waiting_on": "Jane Doe" } }
+  ]
+}

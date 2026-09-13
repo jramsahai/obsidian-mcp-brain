@@ -1,0 +1,9 @@
+{
+  "name": "project-decision",
+  "skills": ["project-tracking"],
+  "today": "2026-08-10",
+  "user": "For Example Project: we decided to delay the launch by two weeks because of vendor issues.",
+  "expect_calls": [
+    { "tool": "section_append", "args": { "note": "/Example Project/i", "section": "Key Decisions", "content": "/delay/i" } }
+  ]
+}

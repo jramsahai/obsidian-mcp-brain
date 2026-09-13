@@ -1,0 +1,9 @@
+{
+  "name": "idea-capture",
+  "skills": ["idea-pipeline"],
+  "user": "New idea: a marketplace app connecting home cooks with people who want home-cooked meals nearby. Call it 'Mealprep Marketplace'.",
+  "expect_calls": [
+    { "tool": "note_create", "args": { "type": "idea", "name": "/Mealprep Marketplace/i" } }
+  ],
+  "forbid_calls": ["task_add"]
+}

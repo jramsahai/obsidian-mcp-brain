@@ -1,0 +1,9 @@
+{
+  "name": "task-relative-due-date",
+  "skills": ["task-tracking"],
+  "today": "2026-08-10",
+  "user": "Remind me to send the signed SOW to Jane Doe in 3 days.",
+  "expect_calls": [
+    { "tool": "task_add", "args": { "text": "/SOW/i", "due": "2026-08-13" } }
+  ]
+}
