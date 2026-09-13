@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { chmodSync } from "node:fs";
+import { chmodSync, unlinkSync } from "node:fs";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, test } from "node:test";
 import { RELATE_CAP } from "../src/relate.ts";
@@ -173,6 +173,85 @@ describe("relate", () => {
       reason: "one connection past the nightly cap",
     });
     assert.match(message, new RegExp(`already taken its ${RELATE_CAP} new related links today`));
+  });
+});
+
+describe("inbox_add", () => {
+  test("creates Inbox.md with the right frontmatter when missing", () => {
+    unlinkSync(join(root, "Inbox.md"));
+    const result = call("inbox_add", { content: "look into the new vendor's contract terms" });
+    assert.equal(result.added, true);
+    assert.equal(result.inbox_created, true);
+    assert.equal(result.path, "Inbox.md");
+
+    const content = read(root, "Inbox.md");
+    assert.match(content, /^---\ntype: index\ncreated: \d{4}-\d{2}-\d{2}\n---\n\n# Inbox/);
+    assert.match(content, /- \d{4}-\d{2}-\d{2}: look into the new vendor's contract terms\n$/);
+  });
+
+  test("appends under the existing heading when Inbox.md already exists", () => {
+    const before = read(root, "Inbox.md");
+    const result = call("inbox_add", { content: "check the espresso machine warranty" });
+    assert.equal(result.added, true);
+    assert.equal(result.inbox_created, false);
+
+    const after = read(root, "Inbox.md");
+    assert.ok(after.startsWith(before.replace(/\n$/, "")));
+    assert.match(after, /check the espresso machine warranty\n$/);
+  });
+
+  test("an exact repeat is skipped and says so", () => {
+    const first = call("inbox_add", { content: "renew the domain before it lapses" });
+    assert.equal(first.added, true);
+    const second = call("inbox_add", { content: "renew the domain before it lapses" });
+    assert.equal(second.added, false);
+    assert.match(second.reason, /already present/);
+    // Only one copy landed.
+    const lines = read(root, "Inbox.md")
+      .split("\n")
+      .filter((l) => l.includes("renew the domain"));
+    assert.equal(lines.length, 1);
+  });
+
+  test("multi-line content is rejected, and the message says the fix", () => {
+    const message = callFails("inbox_add", { content: "first item\nsecond item" });
+    assert.match(message, /one line/);
+    assert.match(message, /one capture per call/);
+  });
+
+  test("a leading list marker is rejected — inbox_add adds it for you", () => {
+    const message = callFails("inbox_add", { content: "- already bulleted" });
+    assert.match(message, /list marker/);
+  });
+
+  test("context is appended in parentheses on the same line", () => {
+    const result = call("inbox_add", {
+      content: "dictated recap mentioning 'Riverside kickoff'",
+      context: "no matching project note; route once one exists",
+    });
+    assert.equal(result.added, true);
+    assert.match(
+      read(root, "Inbox.md"),
+      /dictated recap mentioning 'Riverside kickoff' \(no matching project note; route once one exists\)\n$/,
+    );
+  });
+
+  test("a line added this way is routable by inbox_route", () => {
+    call("inbox_add", { content: "pick up the dry cleaning receipt" });
+    const result = call("inbox_route", {
+      line: "dry cleaning receipt",
+      destination_note: "Test Store",
+    });
+    assert.equal(result.routed, true);
+    assert.match(read(root, "Shopping/Test Store.md"), /dry cleaning receipt/);
+    assert.ok(!read(root, "Inbox.md").includes("dry cleaning receipt"));
+  });
+
+  test("a line added this way is clearable by inbox_clear", () => {
+    call("inbox_add", { content: "confirm the new gym membership rate" });
+    const result = call("inbox_clear", { line: "gym membership rate", captured_as: "Tasks" });
+    assert.equal(result.cleared, true);
+    assert.ok(!read(root, "Inbox.md").includes("gym membership rate"));
   });
 });
 

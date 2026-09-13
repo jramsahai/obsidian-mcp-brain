@@ -4,7 +4,7 @@
   "today": "2026-08-10",
   "user": "Just jot this down: need to follow up on that thing before it slips.",
   "expect_calls": [
-    { "tool": "section_append", "args": { "note": "Inbox", "section": "Inbox" } }
+    { "tool": "inbox_add" }
   ],
-  "forbid_calls": ["task_add", "note_create", "daily_log", "checklist_set", "log_append"]
+  "forbid_calls": ["task_add", "note_create", "daily_log", "checklist_set", "log_append", "section_append"]
 }
