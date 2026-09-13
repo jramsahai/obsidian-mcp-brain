@@ -25,7 +25,7 @@ Call `obsidian__vault_status` first in any scheduled or exploratory run. It answ
 | Need | Tool |
 |---|---|
 | Orientation, today's date, git state | `obsidian__vault_status` |
-| Find notes by type, folder, status, or change date | `obsidian__vault_list` |
+| Find notes by type, folder, status, change date, or staleness | `obsidian__vault_list` |
 | Read a note or one of its sections | `obsidian__vault_read` |
 | Full-text search | `obsidian__vault_search` |
 | Backlinks, outgoing links, unresolved, orphans, deadends | `obsidian__vault_links` |
@@ -98,6 +98,8 @@ Every note gets YAML frontmatter — it is the queryable data model for Obsidian
 You do not write it. `obsidian__note_create` emits the correct keys for the type you ask for, quotes wikilinks in properties, and stamps `created`. The `type` enum in its schema is the list of note kinds; its `fields` argument takes anything extra (`{"status":"On Hold","people":"Jane Doe"}`).
 
 To change a property on a note that already exists, use `obsidian__note_set_field` — it edits that one line and leaves every other byte of the block alone. Which value is right is your judgment; the YAML is not, so do not hand-write it. Keys that decide where a note lives (`type`, `created`, `date`, `project`, `topic`) cannot be changed this way; the field enum lists what can.
+
+`status: Archived` is accepted on project, person, and knowledge notes — set with `obsidian__note_set_field note="[Note Name]" field="status" value="Archived"` — and means the note is intentionally retired, not merely quiet. Only `resurfacing` sets it, and only after the user answers that a specific note should be archived; no other skill infers archival from staleness alone. A person or knowledge note has no `status` in its template, so the first archive adds the field rather than changing it — that is expected, not an error. `obsidian__vault_list status="Archived"` finds them back; `obsidian__vault_list type="project" status="Active"` (what `standup` and `weekly-review` use) already excludes them.
 
 Existing notes that predate this and lack frontmatter are left as they are. `obsidian__section_append` never touches frontmatter.
 

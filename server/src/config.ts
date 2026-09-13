@@ -117,5 +117,19 @@ export function isDate(value: string): boolean {
   }
 }
 
+/**
+ * `date` minus `days` calendar days, as YYYY-MM-DD. Pure calendar arithmetic:
+ * once an anchor date is already the vault's local "today", subtracting whole
+ * days from it needs no further timezone conversion, so this runs the
+ * subtraction in UTC to sidestep DST entirely rather than re-deriving the
+ * vault's offset.
+ */
+export function daysBefore(date: string, days: number): string {
+  const [y, m, d] = assertDate(date, "date").split("-").map(Number);
+  const stamp = new Date(Date.UTC(y, m - 1, d));
+  stamp.setUTCDate(stamp.getUTCDate() - days);
+  return formatDate(stamp, "UTC");
+}
+
 /** An error whose message is meant to be read by the model and acted on. */
 export class ToolError extends Error {}

@@ -71,7 +71,7 @@ topics: []
 - [[Knowledge note or other related note]] — why it is related
 ```
 
-Status values: `Active`, `On Hold`, `Blocked`, `Done`. Status lives in frontmatter (`status:`), not in the body, so Bases and queries can read it.
+Status values: `Active`, `On Hold`, `Blocked`, `Done`, `Archived`. Status lives in frontmatter (`status:`), not in the body, so Bases and queries can read it. `Archived` is set by `resurfacing`, never inferred by this skill — see `second-brain` -> Frontmatter Standards.
 
 `people:` holds quoted wikilinks to person notes: `people: ["[[First Last]]"]`. `topics:` holds plain topic strings: `topics: [video, playback]`.
 

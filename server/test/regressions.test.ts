@@ -181,6 +181,28 @@ describe("frontmatter fidelity", () => {
     );
   });
 
+  test("status can be set to Archived on project, person, and knowledge notes", () => {
+    // Person and knowledge notes carry no status in their template — resurfacing
+    // is the first thing to ever write one, so this is an insert, not an edit.
+    call("note_create", { type: "knowledge", name: "Old Recipe", topic: "Cooking" });
+    assert.equal(
+      call("note_set_field", { note: "Example Project", field: "status", value: "Archived" }).changed,
+      true,
+    );
+    assert.equal(
+      call("note_set_field", { note: "Jane Doe", field: "status", value: "Archived" }).changed,
+      true,
+    );
+    assert.equal(
+      call("note_set_field", { note: "Old Recipe", field: "status", value: "Archived" }).changed,
+      true,
+    );
+    assert.match(read(root, "Projects/Example Project/Example Project.md"), /status: Archived/);
+    assert.match(read(root, "People/Jane Doe.md"), /status: Archived/);
+    assert.match(read(root, "Knowledge Base/Cooking/Old Recipe.md"), /status: Archived/);
+    assert.equal(call("vault_list", { status: "Archived" }).total, 3);
+  });
+
   test("a body-leading horizontal rule is not mistaken for frontmatter", () => {
     mkdirSync(join(root, "Ideas"), { recursive: true });
     writeFileSync(

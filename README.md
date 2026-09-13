@@ -22,6 +22,7 @@ This repo is the core of a larger setup — a vault, an agent, and optionally a 
 | `vault-recall` | Read-only Q&A over the vault: "what do I know about X", conversation history, decision lookups, week summaries. |
 | `nightly-consolidation` | The "sleep cycle": nightly inbox triage, entity wikilinking, MOC maintenance, synthesis notes. Connects and organizes; never invents content. |
 | `skill-tuning` | Monthly, read-only: clusters corrections and review answers into at most three evidenced SKILL.md proposals for the user to merge. Never edits a skill itself. |
+| `resurfacing` | Monthly pass over projects, people, and knowledge notes that have gone quiet (90+ days with no dated entry): proposes keep/archive/link-elsewhere for each, and writes only what the user answers. |
 
 Design principles baked in: folder notes so `[[wikilinks]]` resolve naturally, frontmatter on every note, append-only machine edits (except adding wikilink brackets), and explicit routing rules so each capture lands in exactly one home.
 
@@ -61,7 +62,7 @@ The split is deliberate, and it is **mechanism vs. judgment, not safety vs. risk
 
 3. The skills carry no vault path or timezone of their own: the environment above is the single source of truth, and the tools report the date and vault state to the model.
 
-4. Optional: schedule `nightly-consolidation` (e.g. nightly cron), `standup` (e.g. weekday mornings), `weekly-review` (e.g. Sunday evening), and `skill-tuning` (e.g. monthly) in your harness. `cron/jobs.json` holds the prompts and tool allowlists all four jobs run with — a scheduled prompt is prose the model obeys exactly like a skill, so it is version-controlled and linted alongside them. Delivery targets are not stored there.
+4. Optional: schedule `nightly-consolidation` (e.g. nightly cron), `standup` (e.g. weekday mornings), `weekly-review` (e.g. Sunday evening), `skill-tuning` (e.g. monthly), and `resurfacing` (e.g. the 15th of each month) in your harness. `cron/jobs.json` holds the prompts and tool allowlists all five jobs run with — a scheduled prompt is prose the model obeys exactly like a skill, so it is version-controlled and linted alongside them. Delivery targets are not stored there.
 
    Two things those jobs depend on, both learned the hard way:
 
