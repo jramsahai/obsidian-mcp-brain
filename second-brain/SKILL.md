@@ -153,6 +153,7 @@ Route to the narrowest matching skill:
 - Standup/status synthesis -> use `standup`.
 - Questions answered from vault content ("what do I know about X", "what did Sam and I discuss", "summarize my week") -> use `vault-recall`. Read-only; route any resulting changes to the owning skill.
 - Project creation, project status, decisions, blockers, project docs, meeting notes, project conversations -> use `project-tracking`.
+- A meeting transcript, a dictated recap, or bullet notes from a call/meeting (including voice bridge captures) -> use `meeting-notes` to ingest it; it routes the results into `project-tracking`, `task-tracking`, and `people-notes`.
 - Task creation, status changes, due dates, waiting states, priorities, completion -> use `task-tracking`.
 - Daily note entries, mood, energy, food, purchases, media consumed as a personal diary item, exercise, personal observations -> use `daily-journal`.
 - Person notes, conversations, pending topics, relationship context, project associations -> use `people-notes`.
