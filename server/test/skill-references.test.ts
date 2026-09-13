@@ -148,8 +148,8 @@ function cronJobs(): CronJob[] {
  * was clean. A run then followed it, found no CLI, and did nothing.
  */
 describe("cron job prompts", () => {
-  test("both jobs are present", () => {
-    assert.equal(cronJobs().length, 2);
+  test("all three jobs are present", () => {
+    assert.equal(cronJobs().length, 3);
   });
 
   test("no prompt names a tool or CLI verb that does not exist", () => {
@@ -246,7 +246,7 @@ describe("skill tool references", () => {
       'obsidian__daily_log section="Key Conversations" is not one of: Mood / Energy, Weather, Exercise, Media, Food, Purchases, Random Thoughts',
     ]);
     assert.deepEqual(lintSkillDocument('`obsidian__note_create type="blogpost" name="x"`'), [
-      `obsidian__note_create type="blogpost" is not one of: project, person, meeting, doc, daily, synthesis, knowledge, moc, shopping, idea, index`,
+      `obsidian__note_create type="blogpost" is not one of: project, person, meeting, doc, daily, synthesis, knowledge, moc, shopping, idea, index, review`,
     ]);
     assert.deepEqual(lintSkillDocument('`obsidian__vault_links direction="backlinks"`'), [
       'obsidian__vault_links direction="backlinks" is not one of: in, out, unresolved, ignored, orphans, deadends',

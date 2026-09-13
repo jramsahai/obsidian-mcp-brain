@@ -226,6 +226,52 @@ describe("note_create bodies", () => {
   });
 });
 
+describe("note_create review type", () => {
+  test("derives Reviews/YYYY-Www.md from the ISO week", () => {
+    const result = call("note_create", { type: "review", name: "2026-W37" });
+    assert.equal(result.path, "Reviews/2026-W37.md");
+    assert.ok(existsSync(join(root, result.path)));
+  });
+
+  test("frontmatter carries type, week, and created", () => {
+    call("note_create", { type: "review", name: "2026-W37" });
+    const content = read(root, "Reviews/2026-W37.md");
+    const frontmatter = content.split("---")[1].trim().split("\n");
+    assert.deepEqual(frontmatter, ["type: review", "week: 2026-W37", `created: ${today()}`]);
+  });
+
+  test("sections are laid out in order, Answers last for the user to fill in", () => {
+    const result = call("note_create", { type: "review", name: "2026-W37" });
+    assert.deepEqual(result.sections, [
+      "Shipped",
+      "Slipped",
+      "Quiet Projects",
+      "Observations",
+      "Questions for you",
+      "Answers",
+    ]);
+  });
+
+  test("a repeat call changes nothing", () => {
+    call("note_create", { type: "review", name: "2026-W37" });
+    const first = read(root, "Reviews/2026-W37.md");
+    const result = call("note_create", { type: "review", name: "2026-W37" });
+    assert.equal(result.created, false);
+    assert.equal(read(root, "Reviews/2026-W37.md"), first);
+  });
+
+  test("rejects a name that is not an ISO week, showing the expected form", () => {
+    const message = callFails("note_create", { type: "review", name: "2026-09-12" });
+    assert.match(message, /ISO week/);
+    assert.match(message, /2026-W37/);
+  });
+
+  test("rejects an out-of-range week number", () => {
+    const message = callFails("note_create", { type: "review", name: "2026-W99" });
+    assert.match(message, /ISO week/);
+  });
+});
+
 describe("daily_log", () => {
   test("creates the daily note from the template when it is missing", () => {
     const result = call("daily_log", {
