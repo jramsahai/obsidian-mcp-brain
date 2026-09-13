@@ -4,6 +4,7 @@
   "today": "2026-08-10",
   "user": "Remind me to send the signed SOW to Jane Doe in 3 days.",
   "expect_calls": [
-    { "tool": "task_add", "args": { "text": "/SOW/i", "due": "2026-08-13" } }
+    { "tool": "date_resolve", "args": { "expression": "/in 3 days/i" }, "ordered": true },
+    { "tool": "task_add", "args": { "text": "/SOW/i", "due": "2026-08-13" }, "ordered": true }
   ]
 }

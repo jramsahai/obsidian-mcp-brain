@@ -33,7 +33,13 @@ obsidian__daily_log section="Food" content="Made carbonara, first time with guan
 obsidian__daily_log section="Mood / Energy" content="Low energy all afternoon." date="2026-07-30"
 ```
 
-- Omit `date` for today. Only pass it when the user refers to another day.
+- Omit `date` for today. Only pass it when the user refers to another day — resolve a relative reference ("yesterday", "last friday") with `obsidian__date_resolve` first and pass its `date`:
+
+```text
+obsidian__date_resolve expression="yesterday"
+obsidian__daily_log section="Mood / Energy" content="Low energy all afternoon." date="2026-07-30"
+```
+
 - Preserve the user's wording and tone. Minimal cleanup, no summarizing.
 - Repeat entries are skipped rather than duplicated, so a retry is safe.
 - Wikilink people, projects, and knowledge notes you mention — same words, only brackets added. This is what connects journal entries into the graph. `nightly-consolidation` will catch anything you miss.

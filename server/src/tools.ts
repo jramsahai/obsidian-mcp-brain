@@ -13,6 +13,7 @@ import {
 } from "./config.ts";
 import { computeCalibration } from "./calibrate.ts";
 import { setChecklistItem } from "./checklist.ts";
+import { resolveDateExpression } from "./dates.ts";
 import {
   CORRECTIONS_FILE,
   CORRECTIONS_SECTION,
@@ -1242,6 +1243,33 @@ const vaultSnapshot: ToolDef = {
   },
 };
 
+const dateResolve: ToolDef = {
+  name: "date_resolve",
+  description:
+    'Resolve a relative or shorthand date expression ("next friday", "end of the month", "in 3 days") to an exact YYYY-MM-DD in the vault\'s calendar. Pure arithmetic against from (default today) — reads and writes nothing. Call this before handing any relative date to a tool that takes due, date, or since; those all refuse anything that is not already an exact date.',
+  inputSchema: {
+    type: "object",
+    properties: {
+      expression: {
+        type: "string",
+        description: 'The phrase to resolve, e.g. "next friday", "end of month", "in 3 days".',
+      },
+      from: {
+        type: "string",
+        description: "YYYY-MM-DD to resolve against. Defaults to today in the vault's timezone.",
+      },
+    },
+    required: ["expression"],
+    additionalProperties: false,
+  },
+  handler: (args) => {
+    const expression = req(args, "expression");
+    const from = str(args, "from") ? assertDate(req(args, "from"), "from") : today();
+    const resolved = resolveDateExpression(expression, from);
+    return { ...resolved, from };
+  },
+};
+
 // ------------------------------------------------------------------- capture
 
 const noteCreate: ToolDef = {
@@ -2267,6 +2295,7 @@ export const TOOLS: ToolDef[] = [
   vaultRead,
   vaultSearch,
   vaultLinks,
+  dateResolve,
   noteCreate,
   sectionAppend,
   logAppend,
