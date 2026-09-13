@@ -34,6 +34,7 @@ Call `obsidian__vault_status` first in any scheduled or exploratory run. It answ
 | Add a dated entry to a running log | `obsidian__log_append` |
 | Add a task | `obsidian__task_add` |
 | Change or complete a task | `obsidian__task_update` |
+| Find tasks by status, project, due date, or who they're waiting on | `obsidian__task_query` |
 | Log a personal journal entry | `obsidian__daily_log` |
 | Add, merge, or check off a checkbox item | `obsidian__checklist_set` |
 | Record that two notes are connected | `obsidian__relate` |

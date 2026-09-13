@@ -16,7 +16,7 @@ Generate the week's review by inspecting the Obsidian second brain, then ask the
 
 ## Data Source
 
-- `Tasks.md`, read with `obsidian__vault_read note="Tasks"` — completion dates (`✅ YYYY-MM-DD`), due dates, and waiting states.
+- Task state, via `obsidian__task_query` — `completed_since="YYYY-MM-DD"` (the week's Monday) with `status="done"` for what shipped, `overdue=true` for what slipped, `due_before="YYYY-MM-DD"` (today) with `status="open"` for the rest of what's due this week and not done. Fall back to `obsidian__vault_read note="Tasks"` only when a task's full wording or layout matters beyond what the query fields give you.
 - `Projects/*/[Project Name].md` for status and recent activity — list active projects with `obsidian__vault_list type="project" status="Active"`.
 - `Syntheses/YYYY-MM-DD.md` notes from the last 7 days for overnight observations worth carrying into the review.
 - Notes changed in the last 7 days, via `obsidian__vault_list changed_since="YYYY-MM-DD"`, to see where the week's activity actually landed.
@@ -30,7 +30,7 @@ When asked to run the weekly review, or when invoked by cron:
 
 1. `obsidian__vault_status` for today's local date and `last_review_week`. Derive this week's ISO week from today's date — ISO weeks run Monday to Sunday and week 1 is the week containing 4 January — and format it `YYYY-Www`, e.g. `2026-W37`.
 2. If a review for this week already exists, this is a re-run: read it and continue from what it already has rather than starting over.
-3. `obsidian__vault_read note="Tasks"` for the full task list.
+3. `obsidian__task_query status="done" completed_since="YYYY-MM-DD"` (this week's Monday) for what shipped; `obsidian__task_query overdue=true` and `obsidian__task_query status="open" due_before="YYYY-MM-DD"` (today) for what slipped.
 4. `obsidian__vault_list type="project" status="Active"` for active projects, then read each one worth reporting on.
 5. `obsidian__vault_list changed_since="YYYY-MM-DD"` (7 days back) to see what actually moved this week.
 6. Read this week's `Syntheses/YYYY-MM-DD.md` notes, if any, for observations already surfaced overnight.

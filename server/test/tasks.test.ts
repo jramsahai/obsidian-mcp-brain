@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { afterEach, beforeEach, describe, test } from "node:test";
-import { today } from "../src/config.ts";
+import { addDays, today } from "../src/config.ts";
 import { composeTaskLine, parseTaskLine } from "../src/tasks.ts";
 import { call, callFails, cleanupVault, lineOf, read, useVault } from "./helpers.ts";
 
@@ -201,5 +201,112 @@ describe("task_update", () => {
       .split("\n")
       .filter((l) => l.includes("Review the pricing model")).length;
     assert.equal(occurrences, 1);
+  });
+});
+
+describe("task_query", () => {
+  test("defaults to open, excluding Done", () => {
+    const result = call("task_query");
+    assert.equal(result.count, 4);
+    assert.ok(result.tasks.every((t: { done: boolean }) => t.done === false));
+  });
+
+  test("status=done returns only completed tasks", () => {
+    const result = call("task_query", { status: "done" });
+    assert.equal(result.count, 1);
+    assert.equal(result.tasks[0].text, "Book the kickoff meeting");
+    assert.equal(result.tasks[0].completed, "2026-07-15");
+  });
+
+  test("status=waiting returns tasks waiting on someone else", () => {
+    const result = call("task_query", { status: "waiting" });
+    assert.equal(result.count, 1);
+    assert.equal(result.tasks[0].text, "Confirm the vendor quote");
+    assert.equal(result.tasks[0].waiting_on, "Jane Doe");
+    assert.equal(result.tasks[0].waiting_since, "2026-07-20");
+  });
+
+  test("status=all returns every task, ordered by due date then section, undated last", () => {
+    const result = call("task_query", { status: "all" });
+    assert.equal(result.count, 5);
+    assert.deepEqual(
+      result.tasks.map((t: { text: string }) => t.text),
+      [
+        "Draft the onboarding deck", // only dated task; sorts first
+        "Review the pricing model", // Active, undated
+        "Send Jane the revised scope", // Waiting On Me, undated
+        "Confirm the vendor quote", // Waiting On Others, undated
+        "Book the kickoff meeting", // Done, undated
+      ],
+    );
+  });
+
+  test("project filters to tasks linked to that exact project", () => {
+    call("task_add", { text: "Untethered errand" }); // no project
+    const result = call("task_query", { status: "all", project: "Example Project" });
+    assert.equal(result.count, 5);
+    assert.ok(!result.tasks.some((t: { text: string }) => t.text === "Untethered errand"));
+  });
+
+  test("due_after and due_before bound a range around a relative date", () => {
+    const due = addDays(today(), 3);
+    call("task_add", { text: "File the expense report", due });
+    const result = call("task_query", { due_after: today(), due_before: addDays(today(), 5) });
+    assert.deepEqual(
+      result.tasks.map((t: { text: string }) => t.text),
+      ["File the expense report"],
+    );
+    // The fixture's onboarding deck (2026-08-04) is excluded by due_after.
+    assert.ok(!result.tasks.some((t: { text: string }) => t.text === "Draft the onboarding deck"));
+  });
+
+  test("overdue is open, dated, and strictly before today", () => {
+    const result = call("task_query", { overdue: true });
+    assert.equal(result.count, 1);
+    assert.equal(result.tasks[0].text, "Draft the onboarding deck");
+  });
+
+  test("overdue excludes a task once it is done", () => {
+    call("task_update", { match: "onboarding deck", done: true });
+    const result = call("task_query", { overdue: true });
+    assert.equal(result.count, 0);
+  });
+
+  test("overdue excludes undated tasks", () => {
+    const result = call("task_query", { overdue: true, project: "Example Project" });
+    assert.ok(!result.tasks.some((t: { text: string }) => t.text === "Review the pricing model"));
+  });
+
+  test("completed_since filters by completion date", () => {
+    call("task_update", { match: "pricing model", done: true });
+    const recent = call("task_query", { status: "done", completed_since: today() });
+    assert.deepEqual(
+      recent.tasks.map((t: { text: string }) => t.text),
+      ["Review the pricing model"],
+    );
+    const both = call("task_query", { status: "done", completed_since: "2020-01-01" });
+    assert.equal(both.count, 2);
+  });
+
+  test("waiting_on filters by the person's name", () => {
+    const result = call("task_query", { status: "all", waiting_on: "Jane Doe" });
+    assert.equal(result.count, 1);
+    assert.equal(result.tasks[0].text, "Confirm the vendor quote");
+  });
+
+  test("section restricts to one Tasks.md section", () => {
+    const result = call("task_query", { section: "Waiting On Me" });
+    assert.equal(result.count, 1);
+    assert.equal(result.tasks[0].text, "Send Jane the revised scope");
+  });
+
+  test("limit caps the returned tasks without hiding the true count", () => {
+    const result = call("task_query", { status: "all", limit: 2 });
+    assert.equal(result.count, 5);
+    assert.equal(result.tasks.length, 2);
+  });
+
+  test("today reports the vault's local date", () => {
+    assert.equal(call("task_query").today, today());
   });
 });

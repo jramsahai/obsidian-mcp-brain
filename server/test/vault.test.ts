@@ -205,6 +205,11 @@ describe("vault_status", () => {
     assert.ok(result.unresolved_count >= 1);
     assert.equal(result.git_dirty, null); // git disabled in the fixture config
     assert.equal(result.last_review_week, null); // fixture vault has no Reviews/ yet
+    // Fixture Tasks.md: 4 open (Active x2, Waiting On Me x1, Waiting On Others
+    // x1), 1 done. Only "Draft the onboarding deck" (due 2026-08-04) is dated
+    // and open, and it is already in the past — permanently overdue, never
+    // due_in_7_days. Only "Confirm the vendor quote" carries a waiting_on.
+    assert.deepEqual(result.tasks, { open: 4, overdue: 1, due_in_7_days: 0, waiting: 1 });
   });
 
   test("last_review_week reports the latest review note", () => {

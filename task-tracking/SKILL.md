@@ -20,8 +20,11 @@ Manage centralized tasks in the user's Obsidian second brain. Use `second-brain`
 |---|---|
 | Add a task | `obsidian__task_add text="…"` |
 | Change, move, or complete a task | `obsidian__task_update match="…"` |
+| Look up tasks by status, project, due date, or who they're waiting on | `obsidian__task_query` |
 | See the current list | `obsidian__vault_read note="Tasks"` |
 | See one section | `obsidian__vault_read note="Tasks" section="Waiting On Others"` |
+
+Use `obsidian__task_query` for any status lookup — overdue, due soon, waiting, completed since a date — instead of reading `Tasks.md` and parsing it by eye; reach for `obsidian__vault_read` only when you need the note's exact wording or full layout.
 
 `obsidian__task_add` composes the line, files it in the right section, and rejects a near-duplicate of an existing task. `obsidian__task_update` finds the task by a distinctive fragment of its text, recomposes the whole line, and moves it between sections — including any sub-items nested under it.
 

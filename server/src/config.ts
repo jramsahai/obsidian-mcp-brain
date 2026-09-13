@@ -81,6 +81,19 @@ export function localTimestamp(cfg: Config = config(), now: Date = new Date()): 
   return `${formatDate(now, cfg.timezone)}T${localTime(cfg, now)}:00${offset.replace("GMT", "") || "+00:00"}`;
 }
 
+/**
+ * `dateStr` shifted by `days` calendar days, still YYYY-MM-DD. Pure calendar
+ * math done in UTC so it cannot be nudged a day by the host's own clock — the
+ * timezone already did its job deciding what `dateStr` was.
+ */
+export function addDays(dateStr: string, days: number): string {
+  const match = DATE_RE.exec(dateStr);
+  if (!match) throw new Error(`addDays expects YYYY-MM-DD; got "${dateStr}".`);
+  const [, y, m, d] = match;
+  const shifted = new Date(Date.UTC(Number(y), Number(m) - 1, Number(d) + days));
+  return formatDate(shifted, "UTC");
+}
+
 const DATE_RE = /^(\d{4})-(\d{2})-(\d{2})$/;
 
 /**
