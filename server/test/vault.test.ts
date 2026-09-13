@@ -217,6 +217,12 @@ describe("vault_status", () => {
     call("note_create", { type: "review", name: "2026-W31" });
     assert.equal(call("vault_status").last_review_week, "2026-W31");
   });
+
+  test("inbox_count reports the fixture's one line, and grows with inbox_add", () => {
+    assert.equal(call("vault_status").inbox_count, 1);
+    call("inbox_add", { content: "look into the espresso grinder recall" });
+    assert.equal(call("vault_status").inbox_count, 2);
+  });
 });
 
 describe("section_append", () => {

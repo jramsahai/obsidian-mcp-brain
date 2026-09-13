@@ -40,6 +40,7 @@ Call `obsidian__vault_status` first in any scheduled or exploratory run. It answ
 | Record that two notes are connected | `obsidian__relate` |
 | Log a correction the user made | `obsidian__correction_log` |
 | See correction counts and patterns | `obsidian__corrections_summary` |
+| Capture a line into the inbox | `obsidian__inbox_add` |
 | Move an item out of an inbox | `obsidian__inbox_route` |
 | Drop an inbox line already captured elsewhere | `obsidian__inbox_clear` |
 | Change one frontmatter field | `obsidian__note_set_field` |
@@ -163,7 +164,7 @@ Route to the narrowest matching skill:
 - Nightly linking, inbox triage, MOC maintenance, synthesis -> use `nightly-consolidation`.
 - "Pick up X at [store]" / store shopping items -> use `shopping-list` (writes to `Shopping/[Store Name].md`). Errands with deadlines also get a task via `task-tracking`.
 - Product/startup idea capture, scoring, comparison, promote-to-project decisions -> use `idea-pipeline` (writes to `Ideas/`).
-- Quick captures that are not clearly classifiable -> append to `Inbox.md` and ask only if routing would be risky.
+- Quick captures that are not clearly classifiable -> when no rule fits or the capture is ambiguous, `obsidian__inbox_add` it rather than guessing.
 
 When a request crosses boundaries, use each relevant skill in order. Example: `I talked to Sam about Project X and need to send the proposal Friday` should update people notes, project tracking, and task tracking.
 
@@ -191,7 +192,7 @@ Examples that do not primarily belong there:
 
 ## Inbox
 
-Use `Inbox.md` for unprocessed captures. Date every capture — `- YYYY-MM-DD: item` — so triage can see staleness. Do not let items sit there when the user clearly gave enough information to route them into a project, task, daily note, person file, or knowledge-base note.
+Use `obsidian__inbox_add` for unprocessed captures — it dates the entry and creates `Inbox.md` if needed, so triage can see staleness. Do not let items sit there when the user clearly gave enough information to route them into a project, task, daily note, person file, or knowledge-base note.
 
 ## Safety
 

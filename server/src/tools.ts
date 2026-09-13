@@ -20,6 +20,9 @@ import {
   createNote,
   DAILY_SECTIONS,
   ensureDailyNote,
+  ensureInboxNote,
+  INBOX_FILE,
+  INBOX_SECTION,
   NOTE_TYPES,
   setFrontmatterField,
   SETTABLE_FIELDS,
@@ -56,6 +59,7 @@ import {
   TASKS_FILE,
   type Priority,
   type Task,
+  type TasksDoc,
 } from "./tasks.ts";
 import {
   clearWrittenPaths,
@@ -185,6 +189,19 @@ function resolveWritable(ref: string, options: { allowTasks?: boolean } = {}): N
   return note;
 }
 
+/** Unprocessed lines under Inbox.md's `# Inbox` heading. Zero if it doesn't exist yet. */
+function inboxCount(): number {
+  const note = findNoteSafe(INBOX_FILE);
+  if (!note) return 0;
+  const { content } = readNote(note);
+  const section = findSection(content, INBOX_SECTION);
+  if (!section) return 0;
+  return content
+    .split("\n")
+    .slice(section.start, section.end)
+    .filter((l) => l.trim() !== "").length;
+}
+
 // ---------------------------------------------------------------------- tools
 
 const vaultStatus: ToolDef = {
@@ -248,6 +265,7 @@ const vaultStatus: ToolDef = {
         ).length,
         waiting: openTasks.filter(taskIsWaiting).length,
       },
+      inbox_count: inboxCount(),
       changed_last_24h: changed,
       git_enabled: cfg.gitEnabled,
       // "off" and "on but broken" both used to report git_dirty: null, which
@@ -1837,6 +1855,71 @@ const inboxClear: ToolDef = {
   },
 };
 
+const inboxAdd: ToolDef = {
+  name: "inbox_add",
+  description:
+    "Capture one line into Inbox.md — for when no rule fits or the capture is ambiguous. Creates Inbox.md if it does not exist yet. One capture per call: content is a single line with no leading list marker, and today's date is stamped for you. An exact repeat is skipped and says so. Once the item has a home, inbox_route moves it out; inbox_clear drops it if something else already captured it.",
+  inputSchema: {
+    type: "object",
+    properties: {
+      content: {
+        type: "string",
+        description:
+          'The capture, as one line of plain text — no leading "- " and no date prefix; both are added for you.',
+      },
+      context: {
+        type: "string",
+        description:
+          'Short reason it landed here instead of somewhere specific, e.g. "meeting recap 2026-09-12, no project matched". Appended in parentheses on the same line, so the entry stays one line for inbox_route to find.',
+      },
+    },
+    required: ["content"],
+    additionalProperties: false,
+  },
+  handler: (args) => {
+    const rawContent = req(args, "content");
+    if (/[\r\n]/.test(rawContent)) {
+      throw new ToolError(
+        "content must be one line — one capture per call. Split multiple items across separate inbox_add calls.",
+      );
+    }
+    const content = rawContent.trim();
+    if (!content) throw new ToolError("content is empty; nothing to capture.");
+    if (/^[-*+]\s/.test(content)) {
+      throw new ToolError(
+        `content must not start with a list marker ("${content.slice(0, 2)}"); inbox_add adds the "- " for you. Pass the capture text only.`,
+      );
+    }
+    const rawContext = str(args, "context");
+    if (rawContext !== undefined && /[\r\n]/.test(rawContext)) {
+      throw new ToolError("context must be one line.");
+    }
+    const context = rawContext?.trim();
+
+    const noteCreated = ensureInboxNote();
+    const note = resolveWritable(INBOX_FILE);
+    const current = readNote(note);
+    const date = today();
+    const line = `- ${date}: ${content}${context ? ` (${context})` : ""}`;
+
+    // Bullets are deliberately exempt from the near-duplicate guard everywhere
+    // in the vault (see similar.ts's header): a free bullet has no shape to
+    // key on, so the guard's real-vault measurement rejected 79 genuine
+    // entries against zero real duplicates it would have caught. Inbox.md is
+    // a flat bullet list under its own `# Inbox` heading, not a table, so
+    // appendToSection already skips that guard here — only the exact-repeat
+    // check below applies, same as every other bulleted section.
+    const result = appendToSection(current.content, INBOX_SECTION, line, {
+      notePath: note.path,
+    });
+    if (!result.changed) {
+      return { path: note.path, added: false, inbox_created: noteCreated, reason: result.reason };
+    }
+    writeNoteGuarded(note.path, current.mtimeMs, result.content);
+    return { path: note.path, added: true, inbox_created: noteCreated, line: line.slice(2) };
+  },
+};
+
 const linkIgnore: ToolDef = {
   name: "link_ignore",
   description:
@@ -2037,6 +2120,7 @@ export const TOOLS: ToolDef[] = [
   noteSetField,
   standupWrite,
   inboxClear,
+  inboxAdd,
   vaultSnapshot,
 ];
 

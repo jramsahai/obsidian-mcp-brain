@@ -656,3 +656,28 @@ export function ensureDailyNote(date: string): CreateResult {
   }
   return result;
 }
+
+/** The root inbox and the single `# Inbox` heading every capture lands under. */
+export const INBOX_FILE = "Inbox.md";
+export const INBOX_SECTION = "Inbox";
+
+/**
+ * The note as first written: frontmatter plus the bare `# Inbox` heading,
+ * matching the fixture inbox and every other inbox in the vault. `note_create`
+ * can't produce this shape — its `index` type always derives `<folder>/README.md`,
+ * never a root-level `Inbox.md` — so inbox_add writes it directly on first use,
+ * the same way `ensureCorrectionsLog` seeds `Corrections.md`.
+ */
+export function initialInboxContent(date: string = today()): string {
+  return ["---", "type: index", `created: ${date}`, "---", "", `# ${INBOX_SECTION}`, ""].join("\n");
+}
+
+/** Create `Inbox.md` on first use. Returns whether it was created. */
+export function ensureInboxNote(): boolean {
+  const full = absolutePath(INBOX_FILE);
+  if (existsSync(full)) return false;
+  writeFileSync(full, initialInboxContent(), "utf8");
+  recordWrite(INBOX_FILE);
+  invalidateIndex();
+  return true;
+}

@@ -33,13 +33,13 @@ Material from the voice bridge needs cleanup before anything is written, not lit
 
 1. **Orient.** `obsidian__vault_status` — get today's date for resolving relative dates.
 
-2. **Identify the project.** `obsidian__vault_list type="project"` and match the meeting's project by exact name (case-insensitive; do not fuzzy-guess a misheard project name the way you would a person's). If it matches, proceed normally. If nothing matches, do not invent a project note — `obsidian__note_create type="meeting"` has no way to leave `project` unset, so there is no partial meeting note to create. Route the whole capture, summarized, to `Inbox.md` as one dated line and stop there for this capture:
+2. **Identify the project.** `obsidian__vault_list type="project"` and match the meeting's project by exact name (case-insensitive; do not fuzzy-guess a misheard project name the way you would a person's). If it matches, proceed normally. If nothing matches, do not invent a project note — `obsidian__note_create type="meeting"` has no way to leave `project` unset, so there is no partial meeting note to create. Route the whole capture, summarized, to the inbox and stop there for this capture:
 
    ```
-   obsidian__section_append note="Inbox" section="Inbox" content="- 2026-08-03: dictated recap mentioning 'Riverside kickoff' — no matching project note; route once one exists."
+   obsidian__inbox_add content="dictated recap mentioning 'Riverside kickoff'" context="no matching project note; route once one exists"
    ```
 
-   That works because `Inbox.md`'s own `# Inbox` heading is itself a section `section_append` can target — there is no dedicated "add to inbox" tool, and `obsidian__inbox_route` only moves a line that is already there.
+   `obsidian__inbox_add` dates the line and creates `Inbox.md` if it does not exist yet; `obsidian__inbox_route` then moves the line out once a matching project exists.
 
 3. **Resolve attendees.** For each name heard, check `obsidian__vault_list type="person"` and `obsidian__vault_search query="…" type="person"` before deciding. A confirmed match gets wikilinked in the meeting note's `## Attendees`. A name heard once with no match — including a plausible mishearing of an existing name that still doesn't check out — goes under a `## Unresolved` section on the meeting note (append with `create_section` set, since it is not part of the standard template). Never create a person note from a single meeting mention.
 
