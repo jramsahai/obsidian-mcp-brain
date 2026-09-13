@@ -74,7 +74,7 @@ The split is deliberate, and it is **mechanism vs. judgment, not safety vs. risk
 
 ```sh
 cd server
-npm test          # 287 tests, including a drift lint over every SKILL.md
+npm test          # the full suite, including a drift lint over every SKILL.md
 npm run check     # tsc --noEmit
 npm run build     # rebuild dist/obsidian-mcp.mjs
 npm run evals     # behavioral evals against a model — see below, not part of npm test

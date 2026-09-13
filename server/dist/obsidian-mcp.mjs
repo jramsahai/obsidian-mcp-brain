@@ -15484,6 +15484,9 @@ function config2() {
   if (!cached2) cached2 = loadConfig();
   return cached2;
 }
+function setConfig(next) {
+  cached2 = next;
+}
 function today(cfg = config2(), now = /* @__PURE__ */ new Date()) {
   return formatDate(now, cfg.timezone);
 }
@@ -15500,6 +15503,9 @@ function formatDate(when, timezone) {
 function modifiedOn(mtimeMs, cfg = config2()) {
   return formatDate(new Date(mtimeMs), cfg.timezone);
 }
+function daysAgo(days, cfg = config2(), now = /* @__PURE__ */ new Date()) {
+  return formatDate(new Date(now.getTime() - days * 864e5), cfg.timezone);
+}
 function localTime(cfg = config2(), now = /* @__PURE__ */ new Date()) {
   return new Intl.DateTimeFormat("en-GB", {
     timeZone: cfg.timezone,
@@ -15511,6 +15517,13 @@ function localTime(cfg = config2(), now = /* @__PURE__ */ new Date()) {
 function localTimestamp(cfg = config2(), now = /* @__PURE__ */ new Date()) {
   const offset = new Intl.DateTimeFormat("en-US", { timeZone: cfg.timezone, timeZoneName: "longOffset" }).formatToParts(now).find((p) => p.type === "timeZoneName")?.value ?? "GMT+00:00";
   return `${formatDate(now, cfg.timezone)}T${localTime(cfg, now)}:00${offset.replace("GMT", "") || "+00:00"}`;
+}
+function addDays(dateStr, days) {
+  const match = DATE_RE.exec(dateStr);
+  if (!match) throw new Error(`addDays expects YYYY-MM-DD; got "${dateStr}".`);
+  const [, y, m, d] = match;
+  const shifted = new Date(Date.UTC(Number(y), Number(m) - 1, Number(d) + days));
+  return formatDate(shifted, "UTC");
 }
 var DATE_RE = /^(\d{4})-(\d{2})-(\d{2})$/;
 function assertDate(value, field) {
@@ -15538,6 +15551,12 @@ function isDate(value) {
   } catch {
     return false;
   }
+}
+function daysBefore(date3, days) {
+  const [y, m, d] = assertDate(date3, "date").split("-").map(Number);
+  const stamp = new Date(Date.UTC(y, m - 1, d));
+  stamp.setUTCDate(stamp.getUTCDate() - days);
+  return formatDate(stamp, "UTC");
 }
 var ToolError = class extends Error {
 };
@@ -15752,6 +15771,25 @@ function isWordBoundary(line, start, end) {
 function isWordChar(ch) {
   return ch !== "" && /[\p{L}\p{N}_]/u.test(ch);
 }
+var DATE_TEXT_RE = /^\d{4}-\d{2}-\d{2}$/;
+function lastEntryDate(content) {
+  let latest = null;
+  for (const line of scanLines(content)) {
+    if (line.inFrontmatter || line.inFence) continue;
+    let candidate = null;
+    if (line.heading && DATE_TEXT_RE.test(line.heading.name.trim())) {
+      candidate = line.heading.name.trim();
+    } else if (!line.heading) {
+      const trimmed = line.text.trim();
+      if (trimmed.startsWith("|")) {
+        const firstCell = trimmed.slice(1).split("|")[0]?.trim() ?? "";
+        if (DATE_TEXT_RE.test(firstCell)) candidate = firstCell;
+      }
+    }
+    if (candidate && isDate(candidate) && (!latest || candidate > latest)) latest = candidate;
+  }
+  return latest;
+}
 
 // src/similar.ts
 var SIMILARITY_THRESHOLD = 0.65;
@@ -15951,6 +15989,11 @@ function dateBlocks(content, section) {
 function isDatedLog(content, section) {
   return dateBlocks(content, section).length > 0;
 }
+function sectionShape(content, section) {
+  if (isDatedLog(content, section)) return "dated";
+  const own = { ...section, end: ownContentEnd(content, section) };
+  return detectTable(content, own) ? "table" : "flat";
+}
 function entryLines(text, sectionName, notePath) {
   const raw = text.replace(/\r/g, "").split("\n").map((l) => l.trimEnd());
   while (raw.length && raw[0].trim() === "") raw.shift();
@@ -16141,96 +16184,6 @@ function insertSection(content, sectionName, templateOrder2 = []) {
   return [...lines, "", heading, ""].join("\n");
 }
 
-// src/checklist.ts
-var CHECKBOX_RE = /^(\s*)- \[( |x|X)\]\s+(.*)$/;
-function parseItem(raw, line) {
-  const match = CHECKBOX_RE.exec(raw);
-  if (!match) return null;
-  const rest = match[3];
-  const split = /\s+—\s+/.exec(rest);
-  return {
-    line,
-    raw,
-    checked: match[2].toLowerCase() === "x",
-    text: (split ? rest.slice(0, split.index) : rest).trim(),
-    detail: split ? rest.slice(split.index + split[0].length).trim() : void 0
-  };
-}
-function normalizeItem(text) {
-  return text.toLowerCase().replace(/\[\[([^\]|]+)(?:\|[^\]]+)?\]\]/g, "$1").replace(/[^a-z0-9\s]/g, " ").replace(/\s+/g, " ").trim();
-}
-function setChecklistItem(content, options) {
-  const { item, detail, checked, notePath = "note" } = options;
-  const text = item.trim();
-  if (!text) throw new ToolError("item is empty; nothing to set.");
-  const lines = content.split("\n");
-  const bounds = itemBounds(content, options.section, notePath);
-  const needle = normalizeItem(text);
-  let found = null;
-  for (let i = bounds.start; i < bounds.end; i++) {
-    const parsed = parseItem(lines[i], i);
-    if (parsed && normalizeItem(parsed.text) === needle) {
-      if (!parsed.checked) {
-        found = parsed;
-        break;
-      }
-      found = found ?? parsed;
-    }
-  }
-  if (found) {
-    const nextChecked = checked ?? found.checked;
-    const nextDetail = mergeDetail(found.detail, detail);
-    const line2 = renderItem(indentOf(found.raw), nextChecked, found.text, nextDetail);
-    if (line2 === found.raw) return { content, action: "unchanged", line: line2 };
-    const next2 = [...lines];
-    next2[found.line] = line2;
-    return { content: next2.join("\n"), action: "updated", line: line2 };
-  }
-  const line = renderItem("", checked ?? false, text, detail?.trim() || void 0);
-  const insertAt = lastContentLine2(lines, bounds) + 1;
-  const next = [...lines];
-  next.splice(insertAt, 0, line);
-  return { content: next.join("\n"), action: "added", line };
-}
-function itemBounds(content, sectionName, notePath) {
-  const lines = content.split("\n");
-  if (sectionName) {
-    const section = requireSection(content, sectionName, notePath);
-    return { start: section.start, end: section.end };
-  }
-  const sections = listSections(content).filter((s) => s.level === 2);
-  if (sections.length > 0) {
-    throw new ToolError(
-      `${notePath} has sections, so section is required; sections present: ${sections.map((s) => s.name).join(", ")}.`
-    );
-  }
-  const firstHeading = listSections(content)[0];
-  return { start: firstHeading ? firstHeading.start : 0, end: lines.length };
-}
-function lastContentLine2(lines, bounds) {
-  for (let i = bounds.end - 1; i >= bounds.start; i--) {
-    if (lines[i].trim() !== "") return i;
-  }
-  return bounds.start - 1;
-}
-function indentOf(raw) {
-  return CHECKBOX_RE.exec(raw)?.[1] ?? "";
-}
-function renderItem(indent, checked, text, detail) {
-  const box = checked ? "x" : " ";
-  return `${indent}- [${box}] ${text}${detail ? ` \u2014 ${detail}` : ""}`;
-}
-function mergeDetail(existing, incoming) {
-  const next = incoming?.trim();
-  if (!next) return existing;
-  if (!existing) return next;
-  if (normalizeItem(existing).includes(normalizeItem(next))) return existing;
-  return `${existing}; ${next}`;
-}
-
-// src/corrections.ts
-import { existsSync, writeFileSync as writeFileSync2 } from "node:fs";
-
 // src/vault.ts
 import { readdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { basename, dirname, join, relative, resolve as resolve2, sep } from "node:path";
@@ -16308,7 +16261,8 @@ function walk(root, dir, out) {
 }
 function describe2(root, full) {
   const stat = statSync(full);
-  const parsed = parseNote(readFileSync(full, "utf8"));
+  const content = readFileSync(full, "utf8");
+  const parsed = parseNote(content);
   const relPath = relative(root, full).split(sep).join("/");
   return {
     path: relPath,
@@ -16319,7 +16273,10 @@ function describe2(root, full) {
     aliases: asList(parsed.data.aliases ?? parsed.data.alias),
     frontmatter: parsed.data,
     mtimeMs: stat.mtimeMs,
-    size: stat.size
+    size: stat.size,
+    // Computed off the same content already read for frontmatter — see
+    // lastEntryDate's own comment for why this belongs at index time.
+    lastEntryDate: lastEntryDate(content)
   };
 }
 function resolveNote(ref) {
@@ -16444,7 +16401,371 @@ function writeNoteGuarded(relPath, expectedMtimeMs, content) {
   invalidateIndex();
 }
 
+// src/calibrate.ts
+function collectGroups() {
+  const groups = [];
+  for (const note of getIndex().notes) {
+    if (isTemplate(note)) continue;
+    let content;
+    try {
+      ({ content } = readNote(note));
+    } catch {
+      continue;
+    }
+    const lines = content.split("\n");
+    for (const section of listSections(content)) {
+      const shape = sectionShape(content, section);
+      if (shape === "dated") {
+        collectDatedGroups(content, section, lines, note.path, groups);
+      } else if (shape === "table") {
+        collectTableGroup(content, section, lines, note.path, groups);
+      }
+    }
+  }
+  return groups;
+}
+function collectDatedGroups(content, section, lines, file, groups) {
+  for (const block of dateBlocks(content, section)) {
+    const entries = lines.slice(block.headingLine + 1, block.end).filter((l) => l.trim() !== "");
+    if (entries.length > 1) groups.push({ file, label: `${section.name} :: ${block.date}`, entries });
+  }
+}
+function collectTableGroup(content, section, lines, file, groups) {
+  const table = detectTable(content, section);
+  if (!table) return;
+  const rows = [];
+  for (let i = table.headerLine + 2; i < section.end; i++) {
+    const line = lines[i];
+    if (!line?.trim().startsWith("|")) break;
+    rows.push(line);
+  }
+  if (rows.length > 1) groups.push({ file, label: section.name, entries: rows });
+}
+function computeCalibration(vaultRoot, options = {}) {
+  const cfg = {
+    vaultRoot,
+    timezone: options.timezone ?? "America/New_York",
+    gitEnabled: false,
+    gitBinary: "/usr/bin/git"
+  };
+  setConfig(cfg);
+  invalidateIndex();
+  const groups = collectGroups();
+  let pairsScored = 0;
+  let topPair = null;
+  let topGenuinePair = null;
+  const aboveThresholdPairs = [];
+  for (const group of groups) {
+    for (let i = 0; i < group.entries.length; i++) {
+      for (let j = i + 1; j < group.entries.length; j++) {
+        const score = similarity(group.entries[i], group.entries[j]);
+        pairsScored++;
+        const pair = { file: group.file, group: group.label, a: group.entries[i], b: group.entries[j], score };
+        if (!topPair || score > topPair.score) topPair = pair;
+        if (score >= SIMILARITY_THRESHOLD) {
+          aboveThresholdPairs.push(pair);
+        } else if (!topGenuinePair || score > topGenuinePair.score) {
+          topGenuinePair = pair;
+        }
+      }
+    }
+  }
+  aboveThresholdPairs.sort((a, b) => b.score - a.score);
+  return {
+    vaultRoot,
+    threshold: SIMILARITY_THRESHOLD,
+    pairsScored,
+    aboveThreshold: aboveThresholdPairs.length,
+    aboveThresholdPairs,
+    topPair,
+    topGenuinePair,
+    gapToThreshold: topGenuinePair ? SIMILARITY_THRESHOLD - topGenuinePair.score : null
+  };
+}
+
+// src/checklist.ts
+var CHECKBOX_RE = /^(\s*)- \[( |x|X)\]\s+(.*)$/;
+function parseItem(raw, line) {
+  const match = CHECKBOX_RE.exec(raw);
+  if (!match) return null;
+  const rest = match[3];
+  const split = /\s+—\s+/.exec(rest);
+  return {
+    line,
+    raw,
+    checked: match[2].toLowerCase() === "x",
+    text: (split ? rest.slice(0, split.index) : rest).trim(),
+    detail: split ? rest.slice(split.index + split[0].length).trim() : void 0
+  };
+}
+function normalizeItem(text) {
+  return text.toLowerCase().replace(/\[\[([^\]|]+)(?:\|[^\]]+)?\]\]/g, "$1").replace(/[^a-z0-9\s]/g, " ").replace(/\s+/g, " ").trim();
+}
+function setChecklistItem(content, options) {
+  const { item, detail, checked, notePath = "note" } = options;
+  const text = item.trim();
+  if (!text) throw new ToolError("item is empty; nothing to set.");
+  const lines = content.split("\n");
+  const bounds = itemBounds(content, options.section, notePath);
+  const needle = normalizeItem(text);
+  let found = null;
+  for (let i = bounds.start; i < bounds.end; i++) {
+    const parsed = parseItem(lines[i], i);
+    if (parsed && normalizeItem(parsed.text) === needle) {
+      if (!parsed.checked) {
+        found = parsed;
+        break;
+      }
+      found = found ?? parsed;
+    }
+  }
+  if (found) {
+    const nextChecked = checked ?? found.checked;
+    const nextDetail = mergeDetail(found.detail, detail);
+    const line2 = renderItem(indentOf(found.raw), nextChecked, found.text, nextDetail);
+    if (line2 === found.raw) return { content, action: "unchanged", line: line2 };
+    const next2 = [...lines];
+    next2[found.line] = line2;
+    return { content: next2.join("\n"), action: "updated", line: line2 };
+  }
+  const line = renderItem("", checked ?? false, text, detail?.trim() || void 0);
+  const insertAt = lastContentLine2(lines, bounds) + 1;
+  const next = [...lines];
+  next.splice(insertAt, 0, line);
+  return { content: next.join("\n"), action: "added", line };
+}
+function itemBounds(content, sectionName, notePath) {
+  const lines = content.split("\n");
+  if (sectionName) {
+    const section = requireSection(content, sectionName, notePath);
+    return { start: section.start, end: section.end };
+  }
+  const sections = listSections(content).filter((s) => s.level === 2);
+  if (sections.length > 0) {
+    throw new ToolError(
+      `${notePath} has sections, so section is required; sections present: ${sections.map((s) => s.name).join(", ")}.`
+    );
+  }
+  const firstHeading = listSections(content)[0];
+  return { start: firstHeading ? firstHeading.start : 0, end: lines.length };
+}
+function lastContentLine2(lines, bounds) {
+  for (let i = bounds.end - 1; i >= bounds.start; i--) {
+    if (lines[i].trim() !== "") return i;
+  }
+  return bounds.start - 1;
+}
+function indentOf(raw) {
+  return CHECKBOX_RE.exec(raw)?.[1] ?? "";
+}
+function renderItem(indent, checked, text, detail) {
+  const box = checked ? "x" : " ";
+  return `${indent}- [${box}] ${text}${detail ? ` \u2014 ${detail}` : ""}`;
+}
+function mergeDetail(existing, incoming) {
+  const next = incoming?.trim();
+  if (!next) return existing;
+  if (!existing) return next;
+  if (normalizeItem(existing).includes(normalizeItem(next))) return existing;
+  return `${existing}; ${next}`;
+}
+
+// src/dates.ts
+var WEEKDAY_NAMES = [
+  "Sunday",
+  "Monday",
+  "Tuesday",
+  "Wednesday",
+  "Thursday",
+  "Friday",
+  "Saturday"
+];
+var WEEKDAY_ABBR = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+var JS_DOW = /* @__PURE__ */ new Map([
+  ["sunday", 0],
+  ["monday", 1],
+  ["tuesday", 2],
+  ["wednesday", 3],
+  ["thursday", 4],
+  ["friday", 5],
+  ["saturday", 6]
+]);
+var MONDAY_FIRST_ORDER = /* @__PURE__ */ new Map([
+  ["monday", 0],
+  ["tuesday", 1],
+  ["wednesday", 2],
+  ["thursday", 3],
+  ["friday", 4],
+  ["saturday", 5],
+  ["sunday", 6]
+]);
+var MONTH_NAMES = [
+  "january",
+  "february",
+  "march",
+  "april",
+  "may",
+  "june",
+  "july",
+  "august",
+  "september",
+  "october",
+  "november",
+  "december"
+];
+var MONTH_LOOKUP = /* @__PURE__ */ new Map();
+MONTH_NAMES.forEach((name, i) => {
+  MONTH_LOOKUP.set(name, i + 1);
+  MONTH_LOOKUP.set(name.slice(0, 3), i + 1);
+});
+var MONTH_PATTERN = [...MONTH_LOOKUP.keys()].sort((a, b) => b.length - a.length).join("|");
+var MONTH_DAY_RE = new RegExp(`^(${MONTH_PATTERN}) (\\d{1,2})(?:st|nd|rd|th)?(?:,?\\s+(\\d{4}))?$`);
+var DAY_MONTH_RE = new RegExp(`^(\\d{1,2})(?:st|nd|rd|th)? (${MONTH_PATTERN})(?:,?\\s+(\\d{4}))?$`);
+var SLASH_RE = /^(\d{1,2})\/(\d{1,2})(?:\/(\d{4}))?$/;
+var SUPPORTED_FORMS = 'today, tomorrow, yesterday, "day after tomorrow"; a weekday name ("friday"), "this <weekday>", "next <weekday>"; "in N days/weeks/months", "N days/weeks from now"; "end of week/month/year", "start of next week/month", "next week", "next month"; an exact YYYY-MM-DD; "Month D" / "D Month" / "Mon D" with or without a year; M/D or M/D/YYYY.';
+function pad2(n) {
+  return String(n).padStart(2, "0");
+}
+function formatYmd(y, m, d) {
+  return `${String(y).padStart(4, "0")}-${pad2(m)}-${pad2(d)}`;
+}
+function epochDay(y, m, d) {
+  return Math.floor(Date.UTC(y, m - 1, d) / 864e5);
+}
+function fromEpochDay(epoch) {
+  const dt = new Date(epoch * 864e5);
+  return { y: dt.getUTCFullYear(), m: dt.getUTCMonth() + 1, d: dt.getUTCDate() };
+}
+function dowOf(epoch) {
+  return new Date(epoch * 864e5).getUTCDay();
+}
+function lastDayOfMonth(y, m) {
+  return new Date(Date.UTC(y, m, 0)).getUTCDate();
+}
+function shiftMonth(y, m, n) {
+  const total = m - 1 + n;
+  const newY = y + Math.floor(total / 12);
+  const newM = (total % 12 + 12) % 12 + 1;
+  return { y: newY, m: newM };
+}
+function isValidYmd(y, m, d) {
+  if (m < 1 || m > 12 || d < 1) return false;
+  const back = fromEpochDay(epochDay(y, m, d));
+  return back.y === y && back.m === m && back.d === d;
+}
+function unsupported(expr) {
+  return new ToolError(`"${expr}" is not a date expression I can resolve. Supported forms: ${SUPPORTED_FORMS}`);
+}
+function resolveDateExpression(expr, from) {
+  assertDate(from, "from");
+  const [fy, fm, fd] = from.split("-").map(Number);
+  const fromEpoch = epochDay(fy, fm, fd);
+  const fromAbbr = WEEKDAY_ABBR[dowOf(fromEpoch)];
+  const raw = expr.trim();
+  if (!raw) throw new ToolError("expression is empty. Supported forms: " + SUPPORTED_FORMS);
+  let norm = raw.toLowerCase().replace(/\s+/g, " ");
+  while (/^(on|by|the)\s+/.test(norm)) {
+    norm = norm.replace(/^(on|by|the)\s+/, "");
+  }
+  const interpret = (targetEpoch) => {
+    const { y, m, d } = fromEpochDay(targetEpoch);
+    const date3 = formatYmd(y, m, d);
+    return {
+      date: date3,
+      interpretation: `"${raw}" from ${from} (${fromAbbr}) is ${date3}`,
+      weekday: WEEKDAY_NAMES[dowOf(targetEpoch)]
+    };
+  };
+  if (norm === "today") return interpret(fromEpoch);
+  if (norm === "tomorrow") return interpret(fromEpoch + 1);
+  if (norm === "yesterday") return interpret(fromEpoch - 1);
+  if (norm === "day after tomorrow") return interpret(fromEpoch + 2);
+  const inDays = /^in (\d+) days?$/.exec(norm) ?? /^(\d+) days? from now$/.exec(norm);
+  if (inDays) return interpret(fromEpoch + Number(inDays[1]));
+  const inWeeks = /^in (\d+) weeks?$/.exec(norm) ?? /^(\d+) weeks? from now$/.exec(norm);
+  if (inWeeks) return interpret(fromEpoch + 7 * Number(inWeeks[1]));
+  const inMonths = /^in (\d+) months?$/.exec(norm);
+  if (inMonths) {
+    const n = Number(inMonths[1]);
+    const { y, m } = shiftMonth(fy, fm, n);
+    const d = Math.min(fd, lastDayOfMonth(y, m));
+    return interpret(epochDay(y, m, d));
+  }
+  const mondayOffset = (dowOf(fromEpoch) + 6) % 7;
+  const thisMonday = fromEpoch - mondayOffset;
+  if (/^end of (?:the )?week$/.test(norm)) return interpret(thisMonday + 6);
+  if (norm === "next week" || norm === "start of next week") return interpret(thisMonday + 7);
+  if (/^end of (?:the )?month$/.test(norm)) {
+    return interpret(epochDay(fy, fm, lastDayOfMonth(fy, fm)));
+  }
+  if (/^end of (?:the )?year$/.test(norm)) return interpret(epochDay(fy, 12, 31));
+  if (norm === "next month" || norm === "start of next month") {
+    const { y, m } = shiftMonth(fy, fm, 1);
+    return interpret(epochDay(y, m, 1));
+  }
+  const thisWeekday = /^this (\w+)$/.exec(norm);
+  if (thisWeekday && MONDAY_FIRST_ORDER.has(thisWeekday[1])) {
+    return interpret(thisMonday + MONDAY_FIRST_ORDER.get(thisWeekday[1]));
+  }
+  const nextWeekday = /^next (\w+)$/.exec(norm);
+  if (nextWeekday && MONDAY_FIRST_ORDER.has(nextWeekday[1])) {
+    return interpret(thisMonday + 7 + MONDAY_FIRST_ORDER.get(nextWeekday[1]));
+  }
+  if (JS_DOW.has(norm)) {
+    const targetDow = JS_DOW.get(norm);
+    let diff = (targetDow - dowOf(fromEpoch) + 7) % 7;
+    if (diff === 0) diff = 7;
+    return interpret(fromEpoch + diff);
+  }
+  if (/^\d{4}-\d{2}-\d{2}$/.test(raw)) {
+    assertDate(raw, "expression");
+    const [y, m, d] = raw.split("-").map(Number);
+    return interpret(epochDay(y, m, d));
+  }
+  const resolveMonthDay = (month, day, year) => {
+    let y = year ?? fy;
+    if (!isValidYmd(y, month, day)) {
+      throw new ToolError(`"${expr}" is not a real calendar date. Check the month and day.`);
+    }
+    let epoch = epochDay(y, month, day);
+    if (year === void 0 && epoch < fromEpoch) {
+      y = fy + 1;
+      if (!isValidYmd(y, month, day)) {
+        throw new ToolError(`"${expr}" is not a real calendar date. Check the month and day.`);
+      }
+      epoch = epochDay(y, month, day);
+    }
+    return interpret(epoch);
+  };
+  const monthDay = MONTH_DAY_RE.exec(norm);
+  if (monthDay) {
+    return resolveMonthDay(
+      MONTH_LOOKUP.get(monthDay[1]),
+      Number(monthDay[2]),
+      monthDay[3] ? Number(monthDay[3]) : void 0
+    );
+  }
+  const dayMonth = DAY_MONTH_RE.exec(norm);
+  if (dayMonth) {
+    return resolveMonthDay(
+      MONTH_LOOKUP.get(dayMonth[2]),
+      Number(dayMonth[1]),
+      dayMonth[3] ? Number(dayMonth[3]) : void 0
+    );
+  }
+  const slash = SLASH_RE.exec(norm);
+  if (slash) {
+    return resolveMonthDay(
+      Number(slash[1]),
+      Number(slash[2]),
+      slash[3] ? Number(slash[3]) : void 0
+    );
+  }
+  throw unsupported(expr);
+}
+
 // src/corrections.ts
+import { existsSync, writeFileSync as writeFileSync2 } from "node:fs";
 var CORRECTIONS_FILE = "Corrections.md";
 var CORRECTIONS_SECTION = "Log";
 function initialContent(date3 = today()) {
@@ -16497,6 +16818,30 @@ function correctionRows() {
     });
   }
   return rows;
+}
+function summarizeCorrections(rows, options = {}) {
+  let filtered = rows;
+  if (options.since) filtered = filtered.filter((r) => r.date >= options.since);
+  if (options.skill) filtered = filtered.filter((r) => r.skill.toLowerCase() === options.skill.toLowerCase());
+  const bySkill = /* @__PURE__ */ new Map();
+  for (const row of filtered) {
+    const entry = bySkill.get(row.skill) ?? { count: 0, last_date: row.date, rules: /* @__PURE__ */ new Map() };
+    entry.count++;
+    if (row.date > entry.last_date) entry.last_date = row.date;
+    if (row.rule) entry.rules.set(row.rule, (entry.rules.get(row.rule) ?? 0) + 1);
+    bySkill.set(row.skill, entry);
+  }
+  const by_skill = [...bySkill.entries()].map(([skillName, entry]) => ({
+    skill: skillName,
+    count: entry.count,
+    last_date: entry.last_date,
+    rules: [...entry.rules.entries()].map(([rule, count]) => ({ rule, count })).sort((a, b) => b.count - a.count)
+  })).sort((a, b) => b.count - a.count);
+  return {
+    total: filtered.length,
+    by_skill,
+    recent: filtered.slice(-5).reverse()
+  };
 }
 
 // src/ignored.ts
@@ -16858,7 +17203,8 @@ var NOTE_TYPES = [
   "shopping",
   "idea",
   "index",
-  "review"
+  "review",
+  "goal"
 ];
 var DAILY_SECTIONS = [
   "Mood / Energy",
@@ -16878,7 +17224,9 @@ var REVIEW_SECTIONS = [
   "Questions for you",
   "Answers"
 ];
+var GOAL_SECTIONS = ["Why", "What done looks like", "Projects", "Log"];
 var WIKILINK_LIST_KEYS = /* @__PURE__ */ new Set(["people", "projects"]);
+var SINGLE_WIKILINK_KEYS = /* @__PURE__ */ new Set(["goal"]);
 var PLAIN_LIST_KEYS = /* @__PURE__ */ new Set(["topics", "aliases", "tags"]);
 function buildNote(spec) {
   const fields = spec.fields ?? {};
@@ -17125,6 +17473,23 @@ function buildNote(spec) {
         body: spec.body
       });
     }
+    case "goal": {
+      const name = requireName(spec, "goal");
+      return assemble({
+        path: `Goals/${name}.md`,
+        title: name,
+        type: "goal",
+        heading: name,
+        frontmatter: [
+          ["type", "goal"],
+          ["status", fields.status ?? "active"],
+          ["created", created]
+        ],
+        sections: [...GOAL_SECTIONS],
+        fields,
+        body: spec.body
+      });
+    }
   }
 }
 function requireName(spec, type) {
@@ -17247,6 +17612,7 @@ function assemble(a) {
 function renderValue(key, value) {
   if (value.startsWith("[") || value.startsWith('"')) return value;
   if (WIKILINK_LIST_KEYS.has(key)) return `[${splitList(value).map(quoteLink).join(", ")}]`;
+  if (SINGLE_WIKILINK_KEYS.has(key)) return quoteLink(value);
   if (PLAIN_LIST_KEYS.has(key)) return `[${splitList(value).join(", ")}]`;
   return quoteScalar(value);
 }
@@ -17272,6 +17638,7 @@ var SETTABLE_FIELDS = [
   "topics",
   "people",
   "projects",
+  "goal",
   "aliases",
   "tags"
 ];
@@ -17342,6 +17709,173 @@ function ensureDailyNote(date3) {
     throw new ToolError(`could not create ${result.path}.`);
   }
   return result;
+}
+var INBOX_FILE = "Inbox.md";
+var INBOX_SECTION = "Inbox";
+function initialInboxContent(date3 = today()) {
+  return ["---", "type: index", `created: ${date3}`, "---", "", `# ${INBOX_SECTION}`, ""].join("\n");
+}
+function ensureInboxNote() {
+  const full = absolutePath(INBOX_FILE);
+  if (existsSync3(full)) return false;
+  writeFileSync4(full, initialInboxContent(), "utf8");
+  recordWrite(INBOX_FILE);
+  invalidateIndex();
+  return true;
+}
+
+// src/reject-rate.ts
+import { execFileSync } from "node:child_process";
+var REJECT_WINDOW_DAYS = 14;
+var MACHINE_LABEL_RE = /^(pre-consolidation|nightly consolidation) \d{4}-\d{2}-\d{2}$/;
+var RECORD_SEP = "";
+var FIELD_SEP = "";
+function git(vaultRoot, gitBinary, args) {
+  return execFileSync(gitBinary, ["-C", vaultRoot, ...args], {
+    encoding: "utf8",
+    maxBuffer: 64 * 1024 * 1024
+  });
+}
+function pushTo(map, key, value) {
+  const list = map.get(key);
+  if (list) list.push(value);
+  else map.set(key, [value]);
+}
+function parseLog(raw) {
+  const commits = [];
+  for (const block of raw.split(RECORD_SEP).slice(1)) {
+    const nl = block.indexOf("\n");
+    const header = nl === -1 ? block : block.slice(0, nl);
+    const patch = nl === -1 ? "" : block.slice(nl + 1);
+    const [sha, timestamp, subject] = header.split(FIELD_SEP);
+    const added = /* @__PURE__ */ new Map();
+    const removed = /* @__PURE__ */ new Map();
+    let file = null;
+    for (const line of patch.split("\n")) {
+      if (line.startsWith("diff --git ")) {
+        file = null;
+        continue;
+      }
+      const target = /^\+\+\+ b\/(.+)$/.exec(line);
+      if (target) {
+        file = target[1].replace(/\t$/, "");
+        continue;
+      }
+      if (line.startsWith("--- ") || line.startsWith("+++ ")) continue;
+      if (!file || !file.endsWith(".md")) continue;
+      if (line.startsWith("+")) {
+        const text = line.slice(1);
+        if (text.trim()) pushTo(added, file, text);
+      } else if (line.startsWith("-")) {
+        const text = line.slice(1);
+        if (text.trim()) pushTo(removed, file, text);
+      }
+    }
+    commits.push({ sha, timestamp, date: timestamp.slice(0, 10), subject, added, removed });
+  }
+  return commits;
+}
+function stripWikilinkBrackets(line) {
+  return line.replace(/\[\[([^\]|]+)(?:\|[^\]]+)?\]\]/g, (_m, target) => target);
+}
+var RELATED_BULLET_RE = /^-\s+\[\[[^\]]+\]\]\s*[-—]/;
+var TASK_LINE_RE = /^-\s*\[[ xX]\]/;
+function classify(file, text, removedPool) {
+  const trimmed = text.trim();
+  const stripped = stripWikilinkBrackets(trimmed);
+  if (stripped !== trimmed) {
+    const idx = removedPool.findIndex((r) => r.trim() === stripped);
+    if (idx !== -1) {
+      removedPool.splice(idx, 1);
+      return "wikilink insertion";
+    }
+  }
+  if (file === "Tasks.md" && TASK_LINE_RE.test(trimmed)) return "task line";
+  if (file.startsWith("Syntheses/")) return "synthesis note line";
+  if (RELATED_BULLET_RE.test(trimmed)) return "Related bullet";
+  return "other";
+}
+function isoWeek(date3) {
+  const d = /* @__PURE__ */ new Date(`${date3}T00:00:00Z`);
+  const day = (d.getUTCDay() + 6) % 7;
+  d.setUTCDate(d.getUTCDate() - day + 3);
+  const firstThursday = new Date(Date.UTC(d.getUTCFullYear(), 0, 4));
+  const firstDay = (firstThursday.getUTCDay() + 6) % 7;
+  firstThursday.setUTCDate(firstThursday.getUTCDate() - firstDay + 3);
+  const week = 1 + Math.round((d.getTime() - firstThursday.getTime()) / (7 * 864e5));
+  return `${d.getUTCFullYear()}-W${String(week).padStart(2, "0")}`;
+}
+function aggregate(lines) {
+  const added = lines.length;
+  const rejected = lines.filter((l) => l.rejected).length;
+  return { added, rejected, rate: added ? rejected / added : 0 };
+}
+function groupBy(items, key) {
+  const map = /* @__PURE__ */ new Map();
+  for (const item of items) {
+    const k = key(item);
+    const list = map.get(k);
+    if (list) list.push(item);
+    else map.set(k, [item]);
+  }
+  return map;
+}
+function computeRejectRate(vaultRoot, options = {}) {
+  const windowDays = options.windowDays ?? REJECT_WINDOW_DAYS;
+  const gitBinary = options.gitBinary ?? "/usr/bin/git";
+  const topFilesLimit = options.topFilesLimit ?? 5;
+  const logArgs = ["log", "--reverse", "-p", "--unified=0", `--pretty=format:${RECORD_SEP}%H${FIELD_SEP}%aI${FIELD_SEP}%s`];
+  if (options.since) logArgs.push(`--since=${options.since}`);
+  const commits = parseLog(git(vaultRoot, gitBinary, logArgs));
+  const lines = [];
+  for (const commit of commits) {
+    if (!MACHINE_LABEL_RE.test(commit.subject.trim())) continue;
+    for (const [file, addedLines] of commit.added) {
+      const removedPool = [...commit.removed.get(file) ?? []];
+      for (const text of addedLines) {
+        lines.push({
+          sha: commit.sha,
+          timestamp: commit.timestamp,
+          date: commit.date,
+          file,
+          text: text.trim(),
+          category: classify(file, text, removedPool),
+          rejected: false
+        });
+      }
+    }
+  }
+  for (const record2 of lines) {
+    const recordTime = new Date(record2.timestamp).getTime();
+    for (const commit of commits) {
+      if (commit.sha === record2.sha) continue;
+      const deltaDays = (new Date(commit.timestamp).getTime() - recordTime) / 864e5;
+      if (deltaDays <= 0 || deltaDays > windowDays) continue;
+      const removedHere = commit.removed.get(record2.file);
+      if (removedHere?.some((r) => r.trim() === record2.text)) {
+        record2.rejected = true;
+        record2.rejectedBy = commit.sha;
+        break;
+      }
+    }
+  }
+  const byWeek = [...groupBy(lines, (l) => isoWeek(l.date))].map(([week, ls]) => ({ week, ...aggregate(ls) })).sort((a, b) => a.week.localeCompare(b.week));
+  const topFiles = [...groupBy(lines, (l) => l.file)].map(([file, ls]) => ({ file, added: ls.length, rejected: ls.filter((l) => l.rejected).length })).filter((f) => f.rejected > 0).sort((a, b) => b.rejected - a.rejected).slice(0, topFilesLimit);
+  const byCategory = [...groupBy(lines, (l) => l.category)].map(([category, ls]) => ({
+    category,
+    ...aggregate(ls)
+  }));
+  return {
+    vaultRoot,
+    since: options.since,
+    windowDays,
+    machineCommits: commits.filter((c) => MACHINE_LABEL_RE.test(c.subject.trim())).length,
+    overall: aggregate(lines),
+    byWeek,
+    topFiles,
+    byCategory,
+    lines
+  };
 }
 
 // src/relate.ts
@@ -17526,11 +18060,11 @@ function moveTaskLine(lines, fromLine, newText, toSection) {
 }
 
 // src/git.ts
-import { execFileSync } from "node:child_process";
-function git(args) {
+import { execFileSync as execFileSync2 } from "node:child_process";
+function git2(args) {
   const cfg = config2();
   try {
-    return execFileSync(cfg.gitBinary, ["-C", cfg.vaultRoot, ...args], {
+    return execFileSync2(cfg.gitBinary, ["-C", cfg.vaultRoot, ...args], {
       encoding: "utf8",
       timeout: 15e3,
       maxBuffer: 8 * 1024 * 1024
@@ -17543,7 +18077,7 @@ function git(args) {
 function gitAvailable() {
   if (!config2().gitEnabled) return false;
   try {
-    git(["rev-parse", "--is-inside-work-tree"]);
+    git2(["rev-parse", "--is-inside-work-tree"]);
     return true;
   } catch {
     return false;
@@ -17558,7 +18092,7 @@ function gitDiagnosis() {
 function statusPorcelain(paths = []) {
   const args = ["status", "--porcelain", "-uall"];
   if (paths.length) args.push("--", ...paths);
-  return git(args).split("\n").filter(Boolean);
+  return git2(args).split("\n").filter(Boolean);
 }
 function isDirty() {
   return statusPorcelain().length > 0;
@@ -17582,9 +18116,9 @@ function snapshot(label, paths) {
   if (dirty.length === 0) {
     return { committed: false, files_changed: 0, message: "nothing to commit \u2014 vault already clean" };
   }
-  git(scoped ? ["add", "-A", "--", ...paths] : ["add", "-A"]);
-  git(["commit", "-m", label]);
-  const sha = git(["rev-parse", "--short", "HEAD"]);
+  git2(scoped ? ["add", "-A", "--", ...paths] : ["add", "-A"]);
+  git2(["commit", "-m", label]);
+  const sha = git2(["rev-parse", "--short", "HEAD"]);
   return {
     committed: true,
     sha,
@@ -17670,9 +18204,17 @@ function resolveWritable(ref, options = {}) {
   }
   return note;
 }
+function inboxCount() {
+  const note = findNoteSafe(INBOX_FILE);
+  if (!note) return 0;
+  const { content } = readNote(note);
+  const section = findSection(content, INBOX_SECTION);
+  if (!section) return 0;
+  return content.split("\n").slice(section.start, section.end).filter((l) => l.trim() !== "").length;
+}
 var vaultStatus = {
   name: "vault_status",
-  description: "Vault orientation in one call: today's local date, git dirty state, note counts by type, latest synthesis, daily note, and review week, unresolved/orphan link counts, and notes changed in the last 24 hours. Call this first in any standup, weekly review, or nightly run instead of exploring the vault by hand. git_error is non-null when git is enabled but unusable \u2014 snapshots will fail until it is fixed.",
+  description: "Vault orientation in one call: today's local date, git dirty state, note counts by type, latest synthesis, daily note, and review week, unresolved/orphan link counts, task counts, and notes changed in the last 24 hours. Call this first in any standup, weekly review, or nightly run instead of exploring the vault by hand. git_error is non-null when git is enabled but unusable \u2014 snapshots will fail until it is fixed.",
   inputSchema: { type: "object", properties: {}, additionalProperties: false },
   handler: () => {
     const cfg = config2();
@@ -17692,8 +18234,12 @@ var vaultStatus = {
     const usable = cfg.gitEnabled && gitError === null;
     const latestIn = (folder) => idx.notes.filter((n) => n.path.startsWith(`${folder}/`) && /\d{4}-\d{2}-\d{2}/.test(n.title)).map((n) => n.title).sort().pop() ?? null;
     const lastReviewWeek = idx.notes.filter((n) => n.path.startsWith("Reviews/") && /^\d{4}-W\d{2}$/.test(n.title)).map((n) => n.title).sort().pop() ?? null;
+    const todayStr = today(cfg);
+    const tasksDoc = readTasksDocOrEmpty();
+    const openTasks = tasksDoc.tasks.filter((t) => !t.done);
+    const weekOut = addDays(todayStr, 7);
     return {
-      today: today(cfg),
+      today: todayStr,
       timezone: cfg.timezone,
       total_notes: idx.notes.length,
       counts_by_type: counts,
@@ -17707,6 +18253,15 @@ var vaultStatus = {
       ignored_count: graph.ignored.size,
       orphan_count: orphans.length,
       corrections_count: correctionRows().length,
+      tasks: {
+        open: openTasks.length,
+        overdue: openTasks.filter((t) => taskIsOverdue(t, todayStr)).length,
+        due_in_7_days: openTasks.filter(
+          (t) => t.due !== void 0 && t.due >= todayStr && t.due <= weekOut
+        ).length,
+        waiting: openTasks.filter(taskIsWaiting).length
+      },
+      inbox_count: inboxCount(),
       changed_last_24h: changed,
       git_enabled: cfg.gitEnabled,
       // "off" and "on but broken" both used to report git_dirty: null, which
@@ -17719,7 +18274,7 @@ var vaultStatus = {
 };
 var vaultList = {
   name: "vault_list",
-  description: "List notes, filtered by frontmatter type, top-level folder, frontmatter status, or modification date. Template notes are excluded unless include_templates=true. Set latest=true to get only the newest date-named note in a folder (use this instead of listing a folder and eyeballing the max filename).",
+  description: 'List notes, filtered by frontmatter type, top-level folder, frontmatter status, linked goal, modification date, or last dated entry. Template notes are excluded unless include_templates=true. Set latest=true to get only the newest date-named note in a folder (use this instead of listing a folder and eyeballing the max filename). last_entry_date is the latest `### YYYY-MM-DD` heading or dated table row actually written into the note \u2014 unlike modified, it is not fooled by a consolidation pass touching mtime without adding content. stale_days combined with type="person" or type="project" is the intended way to find who or what has gone quiet.',
   inputSchema: {
     type: "object",
     properties: {
@@ -17729,9 +18284,26 @@ var vaultList = {
       },
       folder: { type: "string", description: "Top-level folder, e.g. Projects, People, Syntheses." },
       status: { type: "string", description: "Frontmatter status filter, e.g. Active, Done." },
+      goal: {
+        type: "string",
+        description: 'Frontmatter goal filter \u2014 exact name of the linked goal note, e.g. "Ship the handheld". Use with type="project" to find every project working toward one goal.'
+      },
       changed_since: {
         type: "string",
         description: "YYYY-MM-DD. Only notes modified on or after this date."
+      },
+      last_entry_before: {
+        type: "string",
+        description: "YYYY-MM-DD. Only notes whose last_entry_date is before this date. Notes with no dated entry (null) do not match."
+      },
+      last_entry_after: {
+        type: "string",
+        description: "YYYY-MM-DD. Only notes whose last_entry_date is on or after this date. Notes with no dated entry (null) do not match."
+      },
+      stale_days: {
+        type: "number",
+        minimum: 0,
+        description: 'Notes with no dated entry at all, or whose last_entry_date is more than this many days before today. This is the filter for "gone quiet": pair it with type="person" or type="project".'
       },
       latest: {
         type: "boolean",
@@ -17749,13 +18321,24 @@ var vaultList = {
     const type = str(args, "type");
     const folder = str(args, "folder");
     const status = str(args, "status");
+    const goal = str(args, "goal");
     const changedSince = str(args, "changed_since");
+    const lastEntryBefore = str(args, "last_entry_before");
+    const lastEntryAfter = str(args, "last_entry_after");
+    const staleDays = num(args, "stale_days");
     const latest = bool(args, "latest");
     const limit = limitArg(args, 100);
     let notes = getIndex().notes;
     if (!(bool(args, "include_templates") ?? false)) notes = notes.filter((n) => !isTemplate(n));
     if (type) notes = notes.filter((n) => n.type?.toLowerCase() === type.toLowerCase());
     if (status) notes = notes.filter((n) => n.status?.toLowerCase() === status.toLowerCase());
+    if (goal) {
+      const target = goal.trim().toLowerCase();
+      notes = notes.filter((n) => {
+        const value = n.frontmatter.goal;
+        return typeof value === "string" && stripWikilink(value).toLowerCase() === target;
+      });
+    }
     if (folder) {
       const prefix = folder.replace(/\/$/, "").toLowerCase() + "/";
       notes = notes.filter((n) => n.path.toLowerCase().startsWith(prefix));
@@ -17763,6 +18346,21 @@ var vaultList = {
     if (changedSince) {
       assertDate(changedSince, "changed_since");
       notes = notes.filter((n) => modifiedOn(n.mtimeMs) >= changedSince);
+    }
+    if (lastEntryBefore) {
+      assertDate(lastEntryBefore, "last_entry_before");
+      notes = notes.filter((n) => n.lastEntryDate !== null && n.lastEntryDate < lastEntryBefore);
+    }
+    if (lastEntryAfter) {
+      assertDate(lastEntryAfter, "last_entry_after");
+      notes = notes.filter((n) => n.lastEntryDate !== null && n.lastEntryDate >= lastEntryAfter);
+    }
+    if (staleDays !== void 0) {
+      if (!Number.isInteger(staleDays) || staleDays < 0) {
+        throw new ToolError(`stale_days must be a whole number of at least 0; got ${staleDays}.`);
+      }
+      const cutoff = daysBefore(today(), staleDays);
+      notes = notes.filter((n) => n.lastEntryDate === null || n.lastEntryDate < cutoff);
     }
     if (latest) {
       const newest = [...notes].sort((a, b) => a.title.localeCompare(b.title)).pop();
@@ -17775,7 +18373,8 @@ var vaultList = {
         title: n.title,
         type: n.type,
         status: n.status,
-        modified: modifiedOn(n.mtimeMs)
+        modified: modifiedOn(n.mtimeMs),
+        last_entry_date: n.lastEntryDate
       }))
     };
   }
@@ -18346,6 +18945,117 @@ var taskUpdate = {
 function has(args, key) {
   return Object.prototype.hasOwnProperty.call(args, key) && args[key] !== null;
 }
+function readTasksDocOrEmpty() {
+  try {
+    return parseTasksDoc(readNote(resolveNote(TASKS_FILE)).content);
+  } catch (error2) {
+    if (error2 instanceof ToolError && /not found/.test(error2.message)) return parseTasksDoc("");
+    throw error2;
+  }
+}
+var TASK_STATUSES = ["open", "done", "waiting", "all"];
+function taskIsWaiting(task) {
+  return !task.done && task.waitingOn !== void 0;
+}
+function taskIsOverdue(task, todayStr) {
+  return !task.done && task.due !== void 0 && task.due < todayStr;
+}
+function sectionRank(name) {
+  const i = TASK_SECTIONS.findIndex((s) => s.toLowerCase() === name.toLowerCase());
+  return i === -1 ? TASK_SECTIONS.length : i;
+}
+var taskQuery = {
+  name: "task_query",
+  description: 'Query Tasks.md by state instead of reading and eyeballing the whole file. Filter by status, project, due-date range, completion date, overdue-ness, who a task is waiting on, or section, and get back parsed fields for each match. Resolve any relative date ("friday", "in 5 days") to YYYY-MM-DD before calling.',
+  inputSchema: {
+    type: "object",
+    properties: {
+      status: {
+        type: "string",
+        enum: [...TASK_STATUSES],
+        description: "open: not done (default). done: completed. waiting: open and waiting on someone else. all: no status filter."
+      },
+      project: { type: "string", description: "Exact existing project name." },
+      due_before: {
+        type: "string",
+        description: "YYYY-MM-DD. Only dated tasks due on or before this date."
+      },
+      due_after: {
+        type: "string",
+        description: "YYYY-MM-DD. Only dated tasks due on or after this date."
+      },
+      completed_since: {
+        type: "string",
+        description: "YYYY-MM-DD. Only tasks completed on or after this date."
+      },
+      overdue: {
+        type: "boolean",
+        description: "true restricts to tasks that are open, dated, and due strictly before today, regardless of status."
+      },
+      waiting_on: { type: "string", description: "Person's note name a task is waiting on." },
+      section: {
+        type: "string",
+        enum: [...TASK_SECTIONS],
+        description: "Restrict to one Tasks.md section."
+      },
+      limit: { type: "number", minimum: 1, description: "Maximum tasks to return. Default 200." }
+    },
+    additionalProperties: false
+  },
+  handler: (args) => {
+    const status = enumArg(args, "status", TASK_STATUSES) ?? "open";
+    const project = str(args, "project");
+    const dueBefore = str(args, "due_before") ? assertDate(req(args, "due_before"), "due_before") : void 0;
+    const dueAfter = str(args, "due_after") ? assertDate(req(args, "due_after"), "due_after") : void 0;
+    const completedSince = str(args, "completed_since") ? assertDate(req(args, "completed_since"), "completed_since") : void 0;
+    const overdue = bool(args, "overdue") ?? false;
+    const waitingOn = str(args, "waiting_on");
+    const section = enumArg(args, "section", TASK_SECTIONS);
+    const limit = limitArg(args, 200);
+    const todayStr = today();
+    const doc = readTasksDocOrEmpty();
+    let tasks = doc.tasks;
+    if (status === "open") tasks = tasks.filter((t) => !t.done);
+    else if (status === "done") tasks = tasks.filter((t) => t.done);
+    else if (status === "waiting") tasks = tasks.filter(taskIsWaiting);
+    if (project) tasks = tasks.filter((t) => t.project?.toLowerCase() === project.toLowerCase());
+    if (dueBefore) tasks = tasks.filter((t) => t.due !== void 0 && t.due <= dueBefore);
+    if (dueAfter) tasks = tasks.filter((t) => t.due !== void 0 && t.due >= dueAfter);
+    if (completedSince) {
+      tasks = tasks.filter((t) => t.completed !== void 0 && t.completed >= completedSince);
+    }
+    if (overdue) tasks = tasks.filter((t) => taskIsOverdue(t, todayStr));
+    if (waitingOn) {
+      tasks = tasks.filter((t) => t.waitingOn?.toLowerCase() === waitingOn.toLowerCase());
+    }
+    if (section) tasks = tasks.filter((t) => t.section.toLowerCase() === section.toLowerCase());
+    const sorted = [...tasks].sort((a, b) => {
+      if (a.due === void 0 && b.due !== void 0) return 1;
+      if (a.due !== void 0 && b.due === void 0) return -1;
+      if (a.due !== void 0 && b.due !== void 0 && a.due !== b.due) {
+        return a.due < b.due ? -1 : 1;
+      }
+      const rank = sectionRank(a.section) - sectionRank(b.section);
+      return rank !== 0 ? rank : a.line - b.line;
+    });
+    return {
+      today: todayStr,
+      count: sorted.length,
+      tasks: sorted.slice(0, limit).map((t) => ({
+        text: t.text,
+        project: t.project ?? null,
+        due: t.due ?? null,
+        priority: t.priority,
+        done: t.done,
+        completed: t.completed ?? null,
+        waiting_on: t.waitingOn ?? null,
+        waiting_since: t.waitingSince ?? null,
+        section: t.section,
+        line: t.line
+      }))
+    };
+  }
+};
 var SNAPSHOT_SCOPES = ["machine", "all"];
 var vaultSnapshot = {
   name: "vault_snapshot",
@@ -18373,6 +19083,31 @@ var vaultSnapshot = {
     return { ...result, scope };
   }
 };
+var dateResolve = {
+  name: "date_resolve",
+  description: `Resolve a relative or shorthand date expression ("next friday", "end of the month", "in 3 days") to an exact YYYY-MM-DD in the vault's calendar. Pure arithmetic against from (default today) \u2014 reads and writes nothing. Call this before handing any relative date to a tool that takes due, date, or since; those all refuse anything that is not already an exact date.`,
+  inputSchema: {
+    type: "object",
+    properties: {
+      expression: {
+        type: "string",
+        description: 'The phrase to resolve, e.g. "next friday", "end of month", "in 3 days".'
+      },
+      from: {
+        type: "string",
+        description: "YYYY-MM-DD to resolve against. Defaults to today in the vault's timezone."
+      }
+    },
+    required: ["expression"],
+    additionalProperties: false
+  },
+  handler: (args) => {
+    const expression = req(args, "expression");
+    const from = str(args, "from") ? assertDate(req(args, "from"), "from") : today();
+    const resolved = resolveDateExpression(expression, from);
+    return { ...resolved, from };
+  }
+};
 var noteCreate = {
   name: "note_create",
   description: "Create a new note of a given type. The server derives the folder and filename from type plus name, emits the required frontmatter, and lays out the standard sections \u2014 never construct a path or write frontmatter by hand. Fill the sections afterwards with section_append. An existing note is never overwritten: the call succeeds with created=false and a reason, and you should append to it with section_append instead.",
@@ -18382,7 +19117,7 @@ var noteCreate = {
       type: {
         type: "string",
         enum: [...NOTE_TYPES],
-        description: `project -> Projects/X/X.md; person -> People/First Last.md; meeting -> the project's Meeting Notes folder; doc -> the project's Docs folder, for drafts, research, and references; daily -> Daily/DATE.md; synthesis -> Syntheses/DATE.md; knowledge and moc -> Knowledge Base/TOPIC/; shopping -> Shopping/Store.md; idea -> Ideas/X.md; index -> a folder's own README, e.g. name="Knowledge Base" gives Knowledge Base/README.md; review -> Reviews/YYYY-Www.md, name is the ISO week e.g. "2026-W37".`
+        description: `project -> Projects/X/X.md; person -> People/First Last.md; meeting -> the project's Meeting Notes folder; doc -> the project's Docs folder, for drafts, research, and references; daily -> Daily/DATE.md; synthesis -> Syntheses/DATE.md; knowledge and moc -> Knowledge Base/TOPIC/; shopping -> Shopping/Store.md; idea -> Ideas/X.md; index -> a folder's own README, e.g. name="Knowledge Base" gives Knowledge Base/README.md; review -> Reviews/YYYY-Www.md, name is the ISO week e.g. "2026-W37"; goal -> Goals/X.md, what a set of projects is working toward.`
       },
       name: {
         type: "string",
@@ -18437,7 +19172,8 @@ var APPLICABLE_ARGS = {
   shopping: ["name"],
   idea: ["name"],
   index: ["name"],
-  review: ["name"]
+  review: ["name"],
+  goal: ["name"]
 };
 var ARG_HINT = {
   name: 'a moc is titled after its topic (e.g. "Cycling MOC"), and daily and synthesis notes are titled by date. Use type="knowledge" if you meant a note with its own name',
@@ -18811,9 +19547,10 @@ var linkify = {
     };
   }
 };
+var GOAL_PROJECTS_SECTION = "Projects";
 var noteSetField = {
   name: "note_set_field",
-  description: "Change one frontmatter field on an existing note \u2014 a project's status, a person's role, a note's topics. Which value is right is your call; the server writes the YAML correctly, quoting wikilink lists so Obsidian still counts them as graph edges. Pass an empty value to remove the field. Only these fields can be set: " + SETTABLE_FIELDS.join(", ") + ". type, created, date, project, and topic decide where the note lives and cannot be changed this way.",
+  description: "Change one frontmatter field on an existing note \u2014 a project's status, a person's role, a project's goal, a note's topics. Which value is right is your call; the server writes the YAML correctly, quoting wikilinks so Obsidian still counts them as graph edges. Setting field=\"goal\" also lists this note under the goal note's `## Projects` section, if that goal note exists and does not already list it \u2014 a link the model would otherwise have to remember to write twice. Pass an empty value to remove the field. Only these fields can be set: " + SETTABLE_FIELDS.join(", ") + ". type, created, date, project, and topic decide where the note lives and cannot be changed this way.",
   inputSchema: {
     type: "object",
     properties: {
@@ -18825,7 +19562,7 @@ var noteSetField = {
       },
       value: {
         type: "string",
-        description: "New value. For people and projects, a comma-separated list of note names \u2014 they become quoted wikilinks. For topics, aliases, and tags, a comma-separated plain list. Empty string removes the field."
+        description: 'New value. For people and projects, a comma-separated list of note names \u2014 they become quoted wikilinks. For goal, a single note name \u2014 it becomes a quoted wikilink, e.g. "Ship the handheld". For topics, aliases, and tags, a comma-separated plain list. Empty string removes the field.'
       }
     },
     required: ["note", "field", "value"],
@@ -18841,13 +19578,32 @@ var noteSetField = {
       return { path: note.path, field, changed: false, reason: "already set to that value" };
     }
     writeNoteGuarded(note.path, current.mtimeMs, edit.content);
-    return {
+    const result = {
       path: note.path,
       field,
       changed: true,
       before: edit.before ?? null,
       cleared: raw === void 0
     };
+    if (field === "goal" && raw) {
+      const goal = findNoteSafe(raw);
+      if (goal && goal.type === "goal") {
+        const goalNote = readNote(goal);
+        if (findSection(goalNote.content, GOAL_PROJECTS_SECTION)) {
+          const back = appendToSection(
+            goalNote.content,
+            GOAL_PROJECTS_SECTION,
+            `- [[${wikilinkTarget(note)}]]`,
+            { notePath: goal.path }
+          );
+          if (back.changed) writeNoteGuarded(goal.path, goalNote.mtimeMs, back.content);
+          result.goal_backlink = back.changed ? "added" : "already present";
+        }
+      } else {
+        result.goal_backlink = "goal note not found; goal set as an unresolved link";
+      }
+    }
+    return result;
   }
 };
 var STANDUP_FILE = "Standup.md";
@@ -18951,6 +19707,58 @@ var inboxClear = {
       captured_as: captured.path,
       removed_line: match.text.trim()
     };
+  }
+};
+var inboxAdd = {
+  name: "inbox_add",
+  description: "Capture one line into Inbox.md \u2014 for when no rule fits or the capture is ambiguous. Creates Inbox.md if it does not exist yet. One capture per call: content is a single line with no leading list marker, and today's date is stamped for you. An exact repeat is skipped and says so. Once the item has a home, inbox_route moves it out; inbox_clear drops it if something else already captured it.",
+  inputSchema: {
+    type: "object",
+    properties: {
+      content: {
+        type: "string",
+        description: 'The capture, as one line of plain text \u2014 no leading "- " and no date prefix; both are added for you.'
+      },
+      context: {
+        type: "string",
+        description: 'Short reason it landed here instead of somewhere specific, e.g. "meeting recap 2026-09-12, no project matched". Appended in parentheses on the same line, so the entry stays one line for inbox_route to find.'
+      }
+    },
+    required: ["content"],
+    additionalProperties: false
+  },
+  handler: (args) => {
+    const rawContent = req(args, "content");
+    if (/[\r\n]/.test(rawContent)) {
+      throw new ToolError(
+        "content must be one line \u2014 one capture per call. Split multiple items across separate inbox_add calls."
+      );
+    }
+    const content = rawContent.trim();
+    if (!content) throw new ToolError("content is empty; nothing to capture.");
+    if (/^[-*+]\s/.test(content)) {
+      throw new ToolError(
+        `content must not start with a list marker ("${content.slice(0, 2)}"); inbox_add adds the "- " for you. Pass the capture text only.`
+      );
+    }
+    const rawContext = str(args, "context");
+    if (rawContext !== void 0 && /[\r\n]/.test(rawContext)) {
+      throw new ToolError("context must be one line.");
+    }
+    const context = rawContext?.trim();
+    const noteCreated = ensureInboxNote();
+    const note = resolveWritable(INBOX_FILE);
+    const current = readNote(note);
+    const date3 = today();
+    const line = `- ${date3}: ${content}${context ? ` (${context})` : ""}`;
+    const result = appendToSection(current.content, INBOX_SECTION, line, {
+      notePath: note.path
+    });
+    if (!result.changed) {
+      return { path: note.path, added: false, inbox_created: noteCreated, reason: result.reason };
+    }
+    writeNoteGuarded(note.path, current.mtimeMs, result.content);
+    return { path: note.path, added: true, inbox_created: noteCreated, line: line.slice(2) };
   }
 };
 var linkIgnore = {
@@ -19080,27 +19888,83 @@ var correctionsSummary = {
   handler: (args) => {
     const since = str(args, "since") ? assertDate(req(args, "since"), "since") : void 0;
     const skill = str(args, "skill");
-    let rows = correctionRows();
-    if (since) rows = rows.filter((r) => r.date >= since);
-    if (skill) rows = rows.filter((r) => r.skill.toLowerCase() === skill.toLowerCase());
-    const bySkill = /* @__PURE__ */ new Map();
-    for (const row of rows) {
-      const entry = bySkill.get(row.skill) ?? { count: 0, last_date: row.date, rules: /* @__PURE__ */ new Map() };
-      entry.count++;
-      if (row.date > entry.last_date) entry.last_date = row.date;
-      if (row.rule) entry.rules.set(row.rule, (entry.rules.get(row.rule) ?? 0) + 1);
-      bySkill.set(row.skill, entry);
+    return summarizeCorrections(correctionRows(), { since, skill });
+  }
+};
+function windowDaysArg(args) {
+  const value = num(args, "window_days");
+  if (value !== void 0 && (!Number.isInteger(value) || value < 1)) {
+    throw new ToolError(`window_days must be a whole number of at least 1; got ${value}.`);
+  }
+  return value;
+}
+function rejectRateUnavailable(cfg) {
+  if (!cfg.gitEnabled) {
+    return "git is disabled; set VAULT_GIT=1 in the server env to enable reject-rate measurement.";
+  }
+  return gitDiagnosis();
+}
+var vaultSignals = {
+  name: "vault_signals",
+  description: "Read-only measurements for the monthly skill-tuning pass, in one call the agent can act on without a shell: reject_rate (added/rejected/rate for machine commits, by line kind, top 5 files), calibration (similarity pair counts, threshold, pairs at or above it, the gap under it, and the highest-scoring pair's texts), corrections (corrections_summary's own shape), and ignored_links (rows added to Ignored Links.md since the window started). since (default 30 days before today) filters reject_rate, corrections, and ignored_links; window_days (default 14) is the reject-rate rejection window. reject_rate is null with reject_rate_unavailable naming the fix when git is disabled or the vault is not a git repo \u2014 the other three sections still populate.",
+  inputSchema: {
+    type: "object",
+    properties: {
+      since: { type: "string", description: "YYYY-MM-DD. Defaults to 30 days before today." },
+      window_days: {
+        type: "number",
+        description: `Reject-rate rejection window in days. Defaults to ${REJECT_WINDOW_DAYS}.`
+      }
+    },
+    additionalProperties: false
+  },
+  handler: (args) => {
+    const started = Date.now();
+    const cfg = config2();
+    const since = str(args, "since") ? assertDate(req(args, "since"), "since") : daysAgo(30, cfg);
+    const windowDays = windowDaysArg(args);
+    let reject_rate = null;
+    const reject_rate_unavailable = rejectRateUnavailable(cfg);
+    if (!reject_rate_unavailable) {
+      const report = computeRejectRate(cfg.vaultRoot, { since, windowDays, gitBinary: cfg.gitBinary });
+      reject_rate = {
+        machine_commits: report.machineCommits,
+        added: report.overall.added,
+        rejected: report.overall.rejected,
+        rate: report.overall.rate,
+        by_category: report.byCategory,
+        top_files: report.topFiles
+      };
     }
-    const by_skill = [...bySkill.entries()].map(([skillName, entry]) => ({
-      skill: skillName,
-      count: entry.count,
-      last_date: entry.last_date,
-      rules: [...entry.rules.entries()].map(([rule, count]) => ({ rule, count })).sort((a, b) => b.count - a.count)
-    })).sort((a, b) => b.count - a.count);
+    const calibrationReport = computeCalibration(cfg.vaultRoot, { timezone: cfg.timezone });
+    setConfig(cfg);
+    invalidateIndex();
+    const calibration = {
+      pairs_scored: calibrationReport.pairsScored,
+      threshold: calibrationReport.threshold,
+      above_threshold: calibrationReport.aboveThreshold,
+      highest_under_threshold: calibrationReport.topGenuinePair?.score ?? null,
+      gap_to_threshold: calibrationReport.gapToThreshold,
+      top_pair: calibrationReport.topPair ? {
+        file: calibrationReport.topPair.file,
+        group: calibrationReport.topPair.group,
+        score: calibrationReport.topPair.score,
+        a: excerpt(calibrationReport.topPair.a, 80),
+        b: excerpt(calibrationReport.topPair.b, 80)
+      } : null
+    };
+    const corrections = summarizeCorrections(correctionRows(), { since });
+    const ignoredSince = ignoredRows().filter((r) => r.since >= since);
+    const ignored_links = { count: ignoredSince.length, rows: ignoredSince };
     return {
-      total: rows.length,
-      by_skill,
-      recent: rows.slice(-5).reverse()
+      since,
+      window_days: windowDays ?? REJECT_WINDOW_DAYS,
+      reject_rate,
+      reject_rate_unavailable,
+      calibration,
+      corrections,
+      ignored_links,
+      elapsed_ms: Date.now() - started
     };
   }
 };
@@ -19110,23 +19974,27 @@ var TOOLS = [
   vaultRead,
   vaultSearch,
   vaultLinks,
+  dateResolve,
   noteCreate,
   sectionAppend,
   logAppend,
   logRemove,
   taskAdd,
   taskUpdate,
+  taskQuery,
   dailyLog,
   checklistSet,
   relate,
   linkIgnore,
   correctionLog,
   correctionsSummary,
+  vaultSignals,
   inboxRoute,
   linkify,
   noteSetField,
   standupWrite,
   inboxClear,
+  inboxAdd,
   vaultSnapshot
 ];
 var TOOLS_BY_NAME = new Map(TOOLS.map((t) => [t.name, t]));
