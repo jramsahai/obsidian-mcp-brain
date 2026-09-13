@@ -148,8 +148,8 @@ function cronJobs(): CronJob[] {
  * was clean. A run then followed it, found no CLI, and did nothing.
  */
 describe("cron job prompts", () => {
-  test("both jobs are present", () => {
-    assert.equal(cronJobs().length, 2);
+  test("all jobs are present", () => {
+    assert.equal(cronJobs().length, 3);
   });
 
   test("no prompt names a tool or CLI verb that does not exist", () => {
@@ -201,7 +201,10 @@ describe("cron job prompts", () => {
       const paths = job.message.match(/\S+\/SKILL\.md/g) ?? [];
       assert.ok(paths.length > 0, `${job.name} names no SKILL.md path`);
       for (const p of paths) {
-        assert.ok(existsSync(p), `${job.name} points at a missing skill file: ${p}`);
+        // Newer prompts use a <skills-dir> placeholder so the path resolves on
+        // whatever checkout runs the job, rather than one operator's machine.
+        const resolved = p.replace("<skills-dir>", SKILLS_DIR);
+        assert.ok(existsSync(resolved), `${job.name} points at a missing skill file: ${p}`);
       }
     }
   });
