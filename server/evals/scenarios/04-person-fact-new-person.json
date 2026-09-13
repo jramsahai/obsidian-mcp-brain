@@ -1,0 +1,9 @@
+{
+  "name": "person-fact-new-person",
+  "skills": ["people-notes"],
+  "user": "Alex Rivera just told me he prefers async written updates over calls.",
+  "expect_calls": [
+    { "tool": "note_create", "args": { "type": "person", "name": "/Alex Rivera/" }, "ordered": true },
+    { "tool": "section_append", "args": { "note": "/Alex Rivera/", "content": "/async/i" }, "ordered": true }
+  ]
+}

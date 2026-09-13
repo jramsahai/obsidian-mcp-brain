@@ -1,0 +1,9 @@
+{
+  "name": "shopping-new-store",
+  "skills": ["shopping-list"],
+  "user": "Pick up a rotisserie chicken next time I'm at Costco.",
+  "expect_calls": [
+    { "tool": "note_create", "args": { "type": "shopping", "name": "/Costco/i" }, "ordered": true },
+    { "tool": "checklist_set", "args": { "note": "/Costco/i", "item": "/chicken/i" }, "ordered": true }
+  ]
+}

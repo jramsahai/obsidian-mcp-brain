@@ -71,12 +71,38 @@ The split is deliberate, and it is **mechanism vs. judgment, not safety vs. risk
 
 ```sh
 cd server
-npm test          # 198 tests, including a drift lint over every SKILL.md
+npm test          # 287 tests, including a drift lint over every SKILL.md
 npm run check     # tsc --noEmit
 npm run build     # rebuild dist/obsidian-mcp.mjs
+npm run evals     # behavioral evals against a model — see below, not part of npm test
 ```
 
 The drift lint is the reason the prose and the tools stay in sync: it fails the build when a SKILL.md names a tool, argument, or enum value that does not exist, shows a worked example missing a required argument, or reintroduces an instruction from the pre-server era.
+
+### Behavioral evals
+
+The drift lint checks prose against schemas — that a SKILL.md's tool calls would actually run. It proves nothing about whether the model that reads a SKILL.md picks the right tool at all. `server/evals/` is the other half: given a capture, does the model call the right tools with the right arguments, in a fresh copy of the fixture vault? This is the gate every later change to a SKILL.md — and every self-improvement proposal — has to pass before it ships.
+
+Each scenario in `server/evals/scenarios/*.json` names the skills to load (`second-brain` plus whatever the scenario lists, concatenated into one system prompt exactly like a real harness would), a user message, and what must happen: `expect_calls` (tool + a partial match on its arguments — string values match exactly, or as a regex when written `"/pattern/flags"`), `forbid_calls` (tool names that must not be called — e.g. every write tool for a read-only question), and `expect_files` (a vault-relative path plus regex patterns its final content must match). `ordered: true` on an `expect_calls` entry means it must land after every earlier `ordered` entry, so a scenario can pin "create the store list before adding to it" without having to spell out the whole transcript — `expect_calls` should be the minimal set that proves routing, not a full transcript.
+
+Run it against any OpenAI-compatible chat-completions endpoint with tool calling — a local `llama-server`, or a hosted one:
+
+```sh
+EVAL_MODEL=your-model-name npm run evals                 # defaults to http://127.0.0.1:8080/v1
+EVAL_BASE_URL=https://api.example.com/v1 EVAL_MODEL=... EVAL_API_KEY=sk-... npm run evals
+node evals/run.ts --only shopping-new-store               # one scenario
+node evals/run.ts --dry-run                                # validate scenarios, print system-prompt size and tool count, call no model
+```
+
+Each scenario copies the fixture vault fresh (`test/helpers.ts`'s `useVault()`), runs up to `max_steps` (default 6) assistant turns with every real tool handler wired in — a tool call the model makes actually writes to that scenario's temp vault, the same as it would to the real one — and reports PASS/FAIL, steps taken, and the first mismatch. A full JSON report (every call made, per-scenario pass/fail) is written to `server/evals/last-run.json`, which is gitignored. The run exits 1 if any scenario fails.
+
+To add a scenario: drop a new `*.json` file in `server/evals/scenarios/`, matching the shape above. `server/test/evals-scenarios.test.ts` (part of `npm test`, no model involved) validates every scenario file, checks it references only real skills and real tools, and runs `--dry-run` end to end — so a broken scenario file fails the normal test suite before anyone spends a model call on it.
+
+**Editing a SKILL.md must keep the evals green.** The scenarios are the only thing standing between a rewording that reads fine and one that quietly changes which tool the model reaches for.
+
+**Model note:** the evals harness has no way to reach a model from CI as shipped — it needs `EVAL_MODEL` pointed at a real OpenAI-compatible endpoint (a local `llama-server` is the intended default). Everything except the actual model round-trip is exercised by `--dry-run` and `evals-scenarios.test.ts`.
+
+**Tool naming:** the tools are presented to the model as `obsidian__<name>` — the spelling OpenClaw exposes them under, and the spelling the skills themselves use. A different host may prefix them differently (Claude Code uses `mcp__obsidian__<name>`); the evals do not model that, since they are checking the skills' own prose against tool behavior, not a specific host's wiring.
 
 ## Vault layout the skills expect
 

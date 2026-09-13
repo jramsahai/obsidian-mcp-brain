@@ -1,0 +1,9 @@
+{
+  "name": "shopping-existing-store",
+  "skills": ["shopping-list"],
+  "user": "Add wood screws to the Test Store list, 2 inch.",
+  "expect_calls": [
+    { "tool": "checklist_set", "args": { "note": "/Test Store/i", "item": "/screws/i" } }
+  ],
+  "forbid_calls": ["note_create"]
+}

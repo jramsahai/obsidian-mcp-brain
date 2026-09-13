@@ -1,0 +1,10 @@
+{
+  "name": "knowledge-fact",
+  "skills": ["knowledge-base"],
+  "user": "Save this for later: espresso grind size directly affects extraction time — a finer grind slows the shot and can over-extract it.",
+  "expect_calls": [
+    { "tool": "note_create", "args": { "type": "knowledge" }, "ordered": true },
+    { "tool": "section_append", "args": { "content": "/extraction/i" }, "ordered": true }
+  ],
+  "forbid_calls": ["task_add", "daily_log"]
+}

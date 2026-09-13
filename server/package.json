@@ -8,7 +8,8 @@
     "build": "esbuild src/index.ts --bundle --platform=node --format=esm --target=node22 --outfile=dist/obsidian-mcp.mjs --banner:js=\"#!/usr/bin/env node\"",
     "test": "node --test test/*.test.ts",
     "check": "tsc --noEmit",
-    "lint:vault": "node scripts/lint-vault-docs.ts"
+    "lint:vault": "node scripts/lint-vault-docs.ts",
+    "evals": "node evals/run.ts"
   },
   "devDependencies": {
     "@modelcontextprotocol/sdk": "^1.30.0",
