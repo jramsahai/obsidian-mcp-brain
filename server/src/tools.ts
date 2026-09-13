@@ -221,7 +221,7 @@ const vaultStatus: ToolDef = {
         .sort()
         .pop() ?? null;
     const todayStr = today(cfg);
-    const tasksDoc = parseTasksDoc(readNote(resolveNote(TASKS_FILE)).content);
+    const tasksDoc = readTasksDocOrEmpty();
     const openTasks = tasksDoc.tasks.filter((t) => !t.done);
     const weekOut = addDays(todayStr, 7);
 
@@ -982,6 +982,20 @@ function has(args: Record<string, unknown>, key: string): boolean {
   return Object.prototype.hasOwnProperty.call(args, key) && args[key] !== null;
 }
 
+/**
+ * A vault that has never had a task added has no Tasks.md yet. For a read —
+ * orientation counts, a query — that is the empty answer, not an error;
+ * task_add creates the file on first use.
+ */
+function readTasksDocOrEmpty(): TasksDoc {
+  try {
+    return parseTasksDoc(readNote(resolveNote(TASKS_FILE)).content);
+  } catch (error) {
+    if (error instanceof ToolError && /not found/.test(error.message)) return parseTasksDoc("");
+    throw error;
+  }
+}
+
 const TASK_STATUSES = ["open", "done", "waiting", "all"] as const;
 type TaskStatus = (typeof TASK_STATUSES)[number];
 
@@ -1059,7 +1073,7 @@ const taskQuery: ToolDef = {
     const limit = limitArg(args, 200);
     const todayStr = today();
 
-    const doc = parseTasksDoc(readNote(resolveNote(TASKS_FILE)).content);
+    const doc = readTasksDocOrEmpty();
     let tasks = doc.tasks;
     if (status === "open") tasks = tasks.filter((t) => !t.done);
     else if (status === "done") tasks = tasks.filter((t) => t.done);

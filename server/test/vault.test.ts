@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { writeFileSync } from "node:fs";
+import { rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, test } from "node:test";
 import { call, callFails, cleanupVault, read, useVault } from "./helpers.ts";
@@ -465,5 +465,15 @@ describe("log_append", () => {
     const before = read(root, PATH).split("\n---\n")[0];
     call("log_append", { note: "Example Project", section: "Activity Log", content: "Proposal sent." });
     assert.equal(read(root, PATH).split("\n---\n")[0], before);
+  });
+});
+
+describe("task reads on a vault with no Tasks.md", () => {
+  test("vault_status and task_query return empty answers, not errors", () => {
+    const root = useVault();
+    rmSync(join(root, "Tasks.md"));
+    assert.deepEqual(call("vault_status").tasks, { open: 0, overdue: 0, due_in_7_days: 0, waiting: 0 });
+    assert.equal(call("task_query").count, 0);
+    cleanupVault();
   });
 });
