@@ -297,6 +297,11 @@ describe("vault_status", () => {
     call("inbox_add", { content: "look into the espresso grinder recall" });
     assert.equal(call("vault_status").inbox_count, 2);
   });
+
+  test("counts_by_type picks up the goal type without any special-casing", () => {
+    call("note_create", { type: "goal", name: "Ship the Handheld" });
+    assert.equal(call("vault_status").counts_by_type.goal, 1);
+  });
 });
 
 describe("section_append", () => {

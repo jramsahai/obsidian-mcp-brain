@@ -63,7 +63,7 @@ Five or six tool calls should cover a normal standup. If you find yourself makin
 
 ## Standup Shape
 
-Use this structure unless the user asks for a different format:
+Use this structure unless the user asks for a different format. When an active project carries a `goal:` field, group its **Projects** line under that goal's name (`obsidian__vault_list type="project" goal="Goal Name"` finds the rest); projects with no goal go last under "Unassigned".
 
 ```markdown
 **Standup — YYYY-MM-DD**

@@ -30,6 +30,7 @@ export const NOTE_TYPES = [
   "idea",
   "index",
   "review",
+  "goal",
 ] as const;
 export type NoteType = (typeof NOTE_TYPES)[number];
 
@@ -55,8 +56,12 @@ const REVIEW_SECTIONS = [
   "Answers",
 ];
 
+const GOAL_SECTIONS = ["Why", "What done looks like", "Projects", "Log"];
+
 /** Frontmatter keys whose values are lists of quoted wikilinks. */
 const WIKILINK_LIST_KEYS = new Set(["people", "projects"]);
+/** Frontmatter keys whose value is a single quoted wikilink, not a list. */
+const SINGLE_WIKILINK_KEYS = new Set(["goal"]);
 /** Frontmatter keys whose values are plain string lists. */
 const PLAIN_LIST_KEYS = new Set(["topics", "aliases", "tags"]);
 
@@ -331,6 +336,28 @@ export function buildNote(spec: CreateSpec): CreatedNote {
         body: spec.body,
       });
     }
+    case "goal": {
+      // Projects say what they are; a goal says what they are for. status is
+      // free-standing (active/achieved/dropped is the model's judgment, like
+      // every other status field), and horizon is genuinely optional free text
+      // (e.g. "2026-Q4") so it is left to flow through as an extra field rather
+      // than declared here with a default that would be wrong most of the time.
+      const name = requireName(spec, "goal");
+      return assemble({
+        path: `Goals/${name}.md`,
+        title: name,
+        type: "goal",
+        heading: name,
+        frontmatter: [
+          ["type", "goal"],
+          ["status", fields.status ?? "active"],
+          ["created", created],
+        ],
+        sections: [...GOAL_SECTIONS],
+        fields,
+        body: spec.body,
+      });
+    }
   }
 }
 
@@ -488,12 +515,14 @@ function assemble(a: Assembly): CreatedNote {
 }
 
 /**
- * Frontmatter is emitted, never re-serialized. Wikilinks in list properties are
- * quoted because Obsidian only reads them as graph edges when they are.
+ * Frontmatter is emitted, never re-serialized. Wikilinks in list and single-value
+ * properties alike are quoted because Obsidian only reads them as graph edges
+ * when they are.
  */
 export function renderValue(key: string, value: string): string {
   if (value.startsWith("[") || value.startsWith('"')) return value;
   if (WIKILINK_LIST_KEYS.has(key)) return `[${splitList(value).map(quoteLink).join(", ")}]`;
+  if (SINGLE_WIKILINK_KEYS.has(key)) return quoteLink(value);
   if (PLAIN_LIST_KEYS.has(key)) return `[${splitList(value).join(", ")}]`;
   return quoteScalar(value);
 }
@@ -544,6 +573,7 @@ export const SETTABLE_FIELDS = [
   "topics",
   "people",
   "projects",
+  "goal",
   "aliases",
   "tags",
 ] as const;

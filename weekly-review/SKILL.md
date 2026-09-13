@@ -44,7 +44,7 @@ When asked to run the weekly review, or when invoked by cron:
 8. Work out the sections:
    - **Shipped** — tasks completed this week (`✅` dates falling in the last 7 days) and any project whose status changed. Name the task or project with a wikilink.
    - **Slipped** — tasks overdue, or due this week and not done. Name the task, its due date, and its project.
-   - **Quiet Projects** — `obsidian__vault_list type="project" status="Active" stale_days=14`. Show each with its `last_entry_date` (or "no dated entry yet" when null) so the reader sees the evidence, not just the label.
+   - **Quiet Projects** — `obsidian__vault_list type="project" status="Active" stale_days=14`. Show each with its `last_entry_date` (or "no dated entry yet" when null) so the reader sees the evidence, not just the label. When a listed project carries a `goal:` field, group its line under that goal's name (`obsidian__vault_list type="project" goal="Goal Name"` finds the rest of that goal's projects); projects with no goal go last under "Unassigned".
    - **Observations** — at most five. Each one names a note with a wikilink and gives a one-line reason it is worth surfacing. Fewer is fine; padding to five is not the goal.
    - **Questions for you** — exactly three questions, drawn from Slipped and Quiet Projects, each specific enough to answer in a sentence, e.g. "[[Example Project]] has been quiet 21 days — park it or push it?" Do not ask a question the vault already answers.
 9. `obsidian__note_create type="review" name="YYYY-Www"` for this week, then `obsidian__section_append` once per section in order (Shipped, Slipped, Quiet Projects, Observations, Questions for you). Leave `## Answers` empty — that is the user's section to fill in, not this skill's.

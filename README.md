@@ -10,6 +10,7 @@ This repo is the core of a larger setup — a vault, an agent, and optionally a 
 |-------|------|
 | `second-brain` | Shared coordination layer: vault config, routing rules, frontmatter standards, linking conventions, the tool surface, machine edit policy. Read this first. |
 | `project-tracking` | Project notes: status, decisions, blockers, docs, task links. |
+| `goals` | Goal notes: what a project or set of projects is working toward, linking projects to a goal, marking a goal achieved or dropped. |
 | `task-tracking` | Centralized checkbox tasks in `Tasks.md` with due dates, priorities, waiting states, and project wikilinks. |
 | `people-notes` | Durable per-person notes: conversations, pending topics, project associations. |
 | `meeting-notes` | Ingests a meeting transcript, dictated recap, or bullet notes into a meeting note, project decisions, tasks, and people-note history. |
@@ -128,6 +129,7 @@ Vault/
 ├── Projects/[Name]/[Name].md
 ├── People/[First Last].md
 ├── Knowledge Base/
+├── Goals/[Goal Name].md
 ├── Ideas/
 ├── Shopping/[Store].md
 ├── Syntheses/YYYY-MM-DD.md

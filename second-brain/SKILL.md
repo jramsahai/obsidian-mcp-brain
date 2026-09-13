@@ -81,6 +81,7 @@ People/[First Last].md          one file per person, named with spaces so [[Firs
 Daily/YYYY-MM-DD.md             daily journal entries
 Knowledge Base/                 personal factual/reference notes, organized by topic
   [Topic]/[Topic] MOC.md        map-of-content hub note once a topic matures
+Goals/[Goal Name].md            what a project or set of projects is working toward
 Shopping/[Store Name].md        per-store shopping lists (checkbox items)
 Ideas/[Idea Name].md            pre-project idea notes with scorecards
 Syntheses/YYYY-MM-DD.md         nightly consolidation synthesis notes
@@ -98,7 +99,7 @@ Naming rule: name the note after the thing so wikilinks resolve. Project note = 
 
 Every note gets YAML frontmatter — it is the queryable data model for Obsidian Bases and any future UI, and wikilinks inside it count as graph edges.
 
-You do not write it. `obsidian__note_create` emits the correct keys for the type you ask for, quotes wikilinks in properties, and stamps `created`. The `type` enum in its schema is the list of note kinds; its `fields` argument takes anything extra (`{"status":"On Hold","people":"Jane Doe"}`).
+You do not write it. `obsidian__note_create` emits the correct keys for the type you ask for, quotes wikilinks in properties, and stamps `created`. The `type` enum in its schema is the list of note kinds; its `fields` argument takes anything extra (`{"status":"On Hold","people":"Jane Doe"}`). A project's `goal:` field holds one quoted wikilink to the `Goals/` note it serves — set it with `obsidian__note_set_field note="Project Name" field="goal" value="Goal Name"`, which also lists the project under that goal's own `## Projects` section.
 
 To change a property on a note that already exists, use `obsidian__note_set_field` — it edits that one line and leaves every other byte of the block alone. Which value is right is your judgment; the YAML is not, so do not hand-write it. Keys that decide where a note lives (`type`, `created`, `date`, `project`, `topic`) cannot be changed this way; the field enum lists what can.
 
@@ -159,6 +160,7 @@ Route to the narrowest matching skill:
 - Standup/status synthesis -> use `standup`.
 - Questions answered from vault content ("what do I know about X", "what did Sam and I discuss", "summarize my week") -> use `vault-recall`. Read-only; route any resulting changes to the owning skill.
 - Project creation, project status, decisions, blockers, project docs, meeting notes, project conversations -> use `project-tracking`.
+- What a project or set of projects is working toward ("my goal this quarter is…"), linking a project to a goal, marking a goal achieved or dropped, "how is `<goal>` going" -> use `goals`.
 - A meeting transcript, a dictated recap, or bullet notes from a call/meeting (including voice bridge captures) -> use `meeting-notes` to ingest it; it routes the results into `project-tracking`, `task-tracking`, and `people-notes`.
 - Task creation, status changes, due dates, waiting states, priorities, completion -> use `task-tracking`.
 - Daily note entries, mood, energy, food, purchases, media consumed as a personal diary item, exercise, personal observations -> use `daily-journal`.
