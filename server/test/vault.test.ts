@@ -204,6 +204,13 @@ describe("vault_status", () => {
     assert.equal(result.counts_by_type.project, 2);
     assert.ok(result.unresolved_count >= 1);
     assert.equal(result.git_dirty, null); // git disabled in the fixture config
+    assert.equal(result.last_review_week, null); // fixture vault has no Reviews/ yet
+  });
+
+  test("last_review_week reports the latest review note", () => {
+    call("note_create", { type: "review", name: "2026-W30" });
+    call("note_create", { type: "review", name: "2026-W31" });
+    assert.equal(call("vault_status").last_review_week, "2026-W31");
   });
 });
 

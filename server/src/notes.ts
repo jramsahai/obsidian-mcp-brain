@@ -29,6 +29,7 @@ export const NOTE_TYPES = [
   "shopping",
   "idea",
   "index",
+  "review",
 ] as const;
 export type NoteType = (typeof NOTE_TYPES)[number];
 
@@ -44,6 +45,15 @@ export const DAILY_SECTIONS = [
 ] as const;
 
 const SYNTHESIS_SECTIONS = ["Observations", "Changes Made Tonight", "Candidates"];
+
+const REVIEW_SECTIONS = [
+  "Shipped",
+  "Slipped",
+  "Quiet Projects",
+  "Observations",
+  "Questions for you",
+  "Answers",
+];
 
 /** Frontmatter keys whose values are lists of quoted wikilinks. */
 const WIKILINK_LIST_KEYS = new Set(["people", "projects"]);
@@ -304,6 +314,23 @@ export function buildNote(spec: CreateSpec): CreatedNote {
         body: spec.body,
       });
     }
+    case "review": {
+      const week = requireIsoWeek(spec);
+      return assemble({
+        path: `Reviews/${week}.md`,
+        title: week,
+        type: "review",
+        heading: week,
+        frontmatter: [
+          ["type", "review"],
+          ["week", week],
+          ["created", created],
+        ],
+        sections: [...REVIEW_SECTIONS],
+        fields,
+        body: spec.body,
+      });
+    }
   }
 }
 
@@ -382,6 +409,30 @@ function requireTopic(spec: CreateSpec): string {
   if (bad !== undefined) {
     throw new ToolError(
       `topic "${raw}" is not a valid folder path — "${bad || "(empty)"}" is not a usable folder name. Use plain folder names, e.g. "Vehicles" or "Cycling/Repair".`,
+    );
+  }
+  return raw;
+}
+
+const ISO_WEEK_RE = /^(\d{4})-W(\d{2})$/;
+
+/**
+ * A review is named after the ISO week it covers, not a free-text name — the
+ * one-per-week identity is what makes a repeat `note_create` idempotent and
+ * lets `vault_status` find "the latest review" by sorting titles.
+ */
+function requireIsoWeek(spec: CreateSpec): string {
+  const raw = (spec.name ?? "").trim();
+  if (!raw) {
+    throw new ToolError(
+      'name is required for a review note — it is the ISO week the review covers, e.g. "2026-W37".',
+    );
+  }
+  const match = ISO_WEEK_RE.exec(raw);
+  const week = match ? Number(match[2]) : NaN;
+  if (!match || week < 1 || week > 53) {
+    throw new ToolError(
+      `name must be an ISO week in the form YYYY-Www, e.g. "2026-W37"; got "${raw}".`,
     );
   }
   return raw;

@@ -324,6 +324,7 @@ describe("note round-trip", () => {
       { type: "idea", args: { name: "Naïve Bayes Thing" } },
       { type: "shopping", args: { name: "Costco" } },
       { type: "index", args: { name: "Knowledge Base" } },
+      { type: "review", args: { name: "2026-W37" } },
     ];
     for (const { type, args } of cases) {
       const created = call("note_create", { type, ...args });
@@ -342,7 +343,7 @@ describe("note round-trip", () => {
   });
 
   test("every note type is creatable and lands where the schema says", () => {
-    assert.equal(NOTE_TYPES.length, 11);
+    assert.equal(NOTE_TYPES.length, 12);
   });
 });
 

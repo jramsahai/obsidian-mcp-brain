@@ -17,6 +17,7 @@ This repo is the core of a larger setup — a vault, an agent, and optionally a 
 | `shopping-list` | Per-store shopping lists (`Shopping/[Store].md`). |
 | `idea-pipeline` | Capture, score, and pressure-test product/startup ideas before promoting them to tracked projects. |
 | `standup` | On-demand or scheduled standup synthesized from project/task state. Read-mostly. |
+| `weekly-review` | Once-a-week pass: what shipped, what slipped, quiet projects, and three questions for the user. Read-mostly, plus applying the user's own prior answers. |
 | `vault-recall` | Read-only Q&A over the vault: "what do I know about X", conversation history, decision lookups, week summaries. |
 | `nightly-consolidation` | The "sleep cycle": nightly inbox triage, entity wikilinking, MOC maintenance, synthesis notes. Connects and organizes; never invents content. |
 
@@ -58,7 +59,7 @@ The split is deliberate, and it is **mechanism vs. judgment, not safety vs. risk
 
 3. The skills carry no vault path or timezone of their own: the environment above is the single source of truth, and the tools report the date and vault state to the model.
 
-4. Optional: schedule `nightly-consolidation` (e.g. nightly cron) and `standup` (e.g. weekday mornings) in your harness. `cron/jobs.json` holds the prompts and tool allowlists both jobs run with — a scheduled prompt is prose the model obeys exactly like a skill, so it is version-controlled and linted alongside them. Delivery targets are not stored there.
+4. Optional: schedule `nightly-consolidation` (e.g. nightly cron), `standup` (e.g. weekday mornings), and `weekly-review` (e.g. Sunday evening) in your harness. `cron/jobs.json` holds the prompts and tool allowlists all three jobs run with — a scheduled prompt is prose the model obeys exactly like a skill, so it is version-controlled and linted alongside them. Delivery targets are not stored there.
 
    Two things those jobs depend on, both learned the hard way:
 
@@ -90,7 +91,8 @@ Vault/
 ├── Knowledge Base/
 ├── Ideas/
 ├── Shopping/[Store].md
-└── Syntheses/YYYY-MM-DD.md
+├── Syntheses/YYYY-MM-DD.md
+└── Reviews/YYYY-Www.md
 ```
 
 Folders are created on first use; no scaffolding step required.

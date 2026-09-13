@@ -190,7 +190,7 @@ function resolveWritable(ref: string, options: { allowTasks?: boolean } = {}): N
 const vaultStatus: ToolDef = {
   name: "vault_status",
   description:
-    "Vault orientation in one call: today's local date, git dirty state, note counts by type, latest synthesis and daily note, unresolved/orphan link counts, and notes changed in the last 24 hours. Call this first in any standup or nightly run instead of exploring the vault by hand. git_error is non-null when git is enabled but unusable — snapshots will fail until it is fixed.",
+    "Vault orientation in one call: today's local date, git dirty state, note counts by type, latest synthesis, daily note, and review week, unresolved/orphan link counts, and notes changed in the last 24 hours. Call this first in any standup, weekly review, or nightly run instead of exploring the vault by hand. git_error is non-null when git is enabled but unusable — snapshots will fail until it is fixed.",
   inputSchema: { type: "object", properties: {}, additionalProperties: false },
   handler: () => {
     const cfg = config();
@@ -214,6 +214,12 @@ const vaultStatus: ToolDef = {
         .map((n) => n.title)
         .sort()
         .pop() ?? null;
+    const lastReviewWeek =
+      idx.notes
+        .filter((n) => n.path.startsWith("Reviews/") && /^\d{4}-W\d{2}$/.test(n.title))
+        .map((n) => n.title)
+        .sort()
+        .pop() ?? null;
 
     return {
       today: today(cfg),
@@ -222,6 +228,7 @@ const vaultStatus: ToolDef = {
       counts_by_type: counts,
       last_synthesis_date: latestIn("Syntheses"),
       last_daily_date: latestIn("Daily"),
+      last_review_week: lastReviewWeek,
       unresolved_count: graph.unresolved.size,
       // Retired candidates are withheld from unresolved but never from the
       // count: a suppression the caller cannot see is a suppression it cannot
@@ -1009,12 +1016,12 @@ const noteCreate: ToolDef = {
         type: "string",
         enum: [...NOTE_TYPES],
         description:
-          "project -> Projects/X/X.md; person -> People/First Last.md; meeting -> the project's Meeting Notes folder; doc -> the project's Docs folder, for drafts, research, and references; daily -> Daily/DATE.md; synthesis -> Syntheses/DATE.md; knowledge and moc -> Knowledge Base/TOPIC/; shopping -> Shopping/Store.md; idea -> Ideas/X.md; index -> a folder's own README, e.g. name=\"Knowledge Base\" gives Knowledge Base/README.md.",
+          "project -> Projects/X/X.md; person -> People/First Last.md; meeting -> the project's Meeting Notes folder; doc -> the project's Docs folder, for drafts, research, and references; daily -> Daily/DATE.md; synthesis -> Syntheses/DATE.md; knowledge and moc -> Knowledge Base/TOPIC/; shopping -> Shopping/Store.md; idea -> Ideas/X.md; index -> a folder's own README, e.g. name=\"Knowledge Base\" gives Knowledge Base/README.md; review -> Reviews/YYYY-Www.md, name is the ISO week e.g. \"2026-W37\".",
       },
       name: {
         type: "string",
         description:
-          "The plain name of the thing — project name, person's full name, store, idea, or knowledge note title. Not a path, not a generic name like Overview. Omit for daily and synthesis, which are named by date.",
+          "The plain name of the thing — project name, person's full name, store, idea, or knowledge note title. Not a path, not a generic name like Overview. Omit for daily and synthesis, which are named by date. For type=review this is the ISO week, e.g. \"2026-W37\".",
       },
       project: {
         type: "string",
@@ -1072,6 +1079,7 @@ const APPLICABLE_ARGS: Record<NoteType, readonly string[]> = {
   shopping: ["name"],
   idea: ["name"],
   index: ["name"],
+  review: ["name"],
 };
 
 const ARG_HINT: Record<string, string> = {
