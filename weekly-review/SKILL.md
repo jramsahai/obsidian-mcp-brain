@@ -32,6 +32,7 @@ When asked to run the weekly review, or when invoked by cron:
 2. If a review for this week already exists, this is a re-run: read it and continue from what it already has rather than starting over.
 3. `obsidian__task_query status="done" completed_since="YYYY-MM-DD"` (this week's Monday) for what shipped; `obsidian__task_query overdue=true` and `obsidian__task_query status="open" due_before="YYYY-MM-DD"` (today) for what slipped.
 4. `obsidian__vault_list type="project" status="Active"` for active projects, then read each one worth reporting on.
+   Quiet Projects itself comes from `obsidian__vault_list type="project" status="Active" stale_days=14` — `last_entry_date` is the note's own dated evidence (an Activity Log block, a table row), not mtime, so a consolidation pass touching a file cannot make a quiet project look active.
 5. `obsidian__vault_list changed_since="YYYY-MM-DD"` (7 days back) to see what actually moved this week.
 6. Read this week's `Syntheses/YYYY-MM-DD.md` notes, if any, for observations already surfaced overnight.
 7. If `last_review_week` names a note, read it and look at its `## Answers` section. Apply what it says, using only the tools this system exposes:
@@ -43,7 +44,7 @@ When asked to run the weekly review, or when invoked by cron:
 8. Work out the sections:
    - **Shipped** — tasks completed this week (`✅` dates falling in the last 7 days) and any project whose status changed. Name the task or project with a wikilink.
    - **Slipped** — tasks overdue, or due this week and not done. Name the task, its due date, and its project.
-   - **Quiet Projects** — active projects with no dated evidence of change (Activity Log, Conversation Log, task activity) in 14+ days. Staleness only from dated evidence; a project with no dated evidence either way is not quiet, it is unclear — leave it out rather than guessing.
+   - **Quiet Projects** — `obsidian__vault_list type="project" status="Active" stale_days=14`. Show each with its `last_entry_date` (or "no dated entry yet" when null) so the reader sees the evidence, not just the label.
    - **Observations** — at most five. Each one names a note with a wikilink and gives a one-line reason it is worth surfacing. Fewer is fine; padding to five is not the goal.
    - **Questions for you** — exactly three questions, drawn from Slipped and Quiet Projects, each specific enough to answer in a sentence, e.g. "[[Example Project]] has been quiet 21 days — park it or push it?" Do not ask a question the vault already answers.
 9. `obsidian__note_create type="review" name="YYYY-Www"` for this week, then `obsidian__section_append` once per section in order (Shipped, Slipped, Quiet Projects, Observations, Questions for you). Leave `## Answers` empty — that is the user's section to fill in, not this skill's.
@@ -65,7 +66,7 @@ Use this structure unless the user asks for a different format:
 - Task, due date, project.
 
 **Quiet Projects**
-- Project — days since last dated activity.
+- Project — last entry 2026-07-20 (or "no dated entry yet").
 
 **Observations**
 - Up to five, each with a wikilink and a one-line reason.

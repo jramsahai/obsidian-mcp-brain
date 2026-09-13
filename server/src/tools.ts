@@ -1,4 +1,4 @@
-import { addDays, assertDate, config, localTimestamp, modifiedOn, ToolError, today } from "./config.ts";
+import { addDays, assertDate, config, daysBefore, localTimestamp, modifiedOn, today, ToolError } from "./config.ts";
 import { setChecklistItem } from "./checklist.ts";
 import {
   CORRECTIONS_FILE,
@@ -280,7 +280,7 @@ const vaultStatus: ToolDef = {
 const vaultList: ToolDef = {
   name: "vault_list",
   description:
-    "List notes, filtered by frontmatter type, top-level folder, frontmatter status, or modification date. Template notes are excluded unless include_templates=true. Set latest=true to get only the newest date-named note in a folder (use this instead of listing a folder and eyeballing the max filename).",
+    "List notes, filtered by frontmatter type, top-level folder, frontmatter status, modification date, or last dated entry. Template notes are excluded unless include_templates=true. Set latest=true to get only the newest date-named note in a folder (use this instead of listing a folder and eyeballing the max filename). last_entry_date is the latest `### YYYY-MM-DD` heading or dated table row actually written into the note — unlike modified, it is not fooled by a consolidation pass touching mtime without adding content. stale_days combined with type=\"person\" or type=\"project\" is the intended way to find who or what has gone quiet.",
   inputSchema: {
     type: "object",
     properties: {
@@ -293,6 +293,22 @@ const vaultList: ToolDef = {
       changed_since: {
         type: "string",
         description: "YYYY-MM-DD. Only notes modified on or after this date.",
+      },
+      last_entry_before: {
+        type: "string",
+        description:
+          "YYYY-MM-DD. Only notes whose last_entry_date is before this date. Notes with no dated entry (null) do not match.",
+      },
+      last_entry_after: {
+        type: "string",
+        description:
+          "YYYY-MM-DD. Only notes whose last_entry_date is on or after this date. Notes with no dated entry (null) do not match.",
+      },
+      stale_days: {
+        type: "number",
+        minimum: 0,
+        description:
+          "Notes with no dated entry at all, or whose last_entry_date is more than this many days before today. This is the filter for \"gone quiet\": pair it with type=\"person\" or type=\"project\".",
       },
       latest: {
         type: "boolean",
@@ -312,6 +328,9 @@ const vaultList: ToolDef = {
     const folder = str(args, "folder");
     const status = str(args, "status");
     const changedSince = str(args, "changed_since");
+    const lastEntryBefore = str(args, "last_entry_before");
+    const lastEntryAfter = str(args, "last_entry_after");
+    const staleDays = num(args, "stale_days");
     const latest = bool(args, "latest");
     const limit = limitArg(args, 100);
 
@@ -327,6 +346,25 @@ const vaultList: ToolDef = {
       assertDate(changedSince, "changed_since");
       notes = notes.filter((n) => modifiedOn(n.mtimeMs) >= changedSince);
     }
+    if (lastEntryBefore) {
+      assertDate(lastEntryBefore, "last_entry_before");
+      notes = notes.filter((n) => n.lastEntryDate !== null && n.lastEntryDate < lastEntryBefore);
+    }
+    if (lastEntryAfter) {
+      assertDate(lastEntryAfter, "last_entry_after");
+      notes = notes.filter((n) => n.lastEntryDate !== null && n.lastEntryDate >= lastEntryAfter);
+    }
+    if (staleDays !== undefined) {
+      if (!Number.isInteger(staleDays) || staleDays < 0) {
+        throw new ToolError(`stale_days must be a whole number of at least 0; got ${staleDays}.`);
+      }
+      const cutoff = daysBefore(today(), staleDays);
+      // No dated entry at all is the quietest a note can be — it counts as
+      // stale rather than being excluded, which is the whole point of this
+      // filter over changed_since: a note nobody ever logged into is exactly
+      // what "who haven't I talked to" is asking about.
+      notes = notes.filter((n) => n.lastEntryDate === null || n.lastEntryDate < cutoff);
+    }
     if (latest) {
       const newest = [...notes].sort((a, b) => a.title.localeCompare(b.title)).pop();
       notes = newest ? [newest] : [];
@@ -339,6 +377,7 @@ const vaultList: ToolDef = {
         type: n.type,
         status: n.status,
         modified: modifiedOn(n.mtimeMs),
+        last_entry_date: n.lastEntryDate,
       })),
     };
   },

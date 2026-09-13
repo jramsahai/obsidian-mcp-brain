@@ -2,6 +2,7 @@ import { readdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { basename, dirname, join, relative, resolve, sep } from "node:path";
 import { config, ToolError } from "./config.ts";
 import { asList, asString, parseNote, type Frontmatter } from "./frontmatter.ts";
+import { lastEntryDate } from "./scan.ts";
 
 const SKIP_DIRS = new Set([".git", ".obsidian", ".trash", "node_modules", ".DS_Store"]);
 /** Filenames that must never be created or resolved to — they break wikilinks. */
@@ -31,6 +32,8 @@ export interface Note {
   frontmatter: Frontmatter;
   mtimeMs: number;
   size: number;
+  /** Latest `### YYYY-MM-DD` heading or dated table row in the body, or null. See `lastEntryDate`. */
+  lastEntryDate: string | null;
 }
 
 interface Index {
@@ -125,7 +128,8 @@ function walk(root: string, dir: string, out: Note[]): void {
 
 function describe(root: string, full: string): Note {
   const stat = statSync(full);
-  const parsed = parseNote(readFileSync(full, "utf8"));
+  const content = readFileSync(full, "utf8");
+  const parsed = parseNote(content);
   const relPath = relative(root, full).split(sep).join("/");
   return {
     path: relPath,
@@ -137,6 +141,9 @@ function describe(root: string, full: string): Note {
     frontmatter: parsed.data,
     mtimeMs: stat.mtimeMs,
     size: stat.size,
+    // Computed off the same content already read for frontmatter — see
+    // lastEntryDate's own comment for why this belongs at index time.
+    lastEntryDate: lastEntryDate(content),
   };
 }
 

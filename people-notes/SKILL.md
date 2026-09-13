@@ -82,6 +82,14 @@ When logging a conversation:
 - Mark a topic handled with the same call plus `checked=true`, and only when the user says it was handled. Nothing removes the line — a checked topic is the record that it happened.
 - If a pending topic is tied to a project, include the `[[Project Name]]` wikilink in the topic text.
 
+## Cadence
+
+On "who haven't I talked to" or "who should I reach out to":
+
+1. `obsidian__vault_list type="person" stale_days=60`, sorted oldest first (a null `last_entry_date` — never logged at all — sorts first, ahead of every real date).
+2. For each, read the note and report: the person's name as a wikilink, their `last_entry_date` (or "no logged conversation yet"), and any open items under `## Pending Topics`.
+3. This is a suggestion, never a write — do not log a conversation, close a pending topic, or change `status` from a cadence check. The user decides who to reach out to; this skill only surfaces who has gone quiet.
+
 ## Relationship to Projects and Tasks
 
 - People files link to projects under `## Associated Projects` and in frontmatter `projects:`.

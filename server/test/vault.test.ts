@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, test } from "node:test";
+import { daysBefore, today } from "../src/config.ts";
 import { call, callFails, cleanupVault, read, useVault } from "./helpers.ts";
 
 let root: string;
@@ -84,6 +85,79 @@ describe("vault_list", () => {
     assert.equal(result.truncated, false);
     assert.equal(result.note, undefined);
     assert.equal(result.returned, result.total);
+  });
+
+  test("reports last_entry_date from the note's own dated content, not mtime", () => {
+    // Example Project's newest dated evidence is a Key Decisions row;
+    // Jane Doe's is a Conversation History row. Neither has an Activity Log
+    // block, so the table rows are all there is to find.
+    const project = call("vault_list", { type: "project" }).notes[0];
+    assert.equal(project.last_entry_date, "2026-07-01");
+    const person = call("vault_list", { type: "person" }).notes[0];
+    assert.equal(person.last_entry_date, "2026-07-20");
+  });
+});
+
+describe("vault_list last_entry filters and stale_days", () => {
+  test("last_entry_before and last_entry_after bracket by dated content, not mtime", () => {
+    assert.deepEqual(
+      call("vault_list", { type: "project", last_entry_before: "2026-07-02" }).notes.map(
+        (n: { title: string }) => n.title,
+      ),
+      ["Example Project"],
+    );
+    assert.equal(call("vault_list", { type: "project", last_entry_before: "2026-07-01" }).total, 0);
+    assert.equal(call("vault_list", { type: "project", last_entry_after: "2026-07-01" }).total, 1);
+    assert.equal(call("vault_list", { type: "project", last_entry_after: "2026-07-02" }).total, 0);
+  });
+
+  test("a note with no dated entry never matches last_entry_before/after", () => {
+    call("note_create", { type: "person", name: "No Entries Yet" });
+    const notes = call("vault_list", { type: "person", last_entry_after: "2000-01-01" }).notes;
+    assert.ok(!notes.some((n: { title: string }) => n.title === "No Entries Yet"));
+  });
+
+  test("stale_days matches null last_entry_date as well as old ones", () => {
+    // A person note freshly created has no dated entry at all — the quietest
+    // a note can be, and exactly what "who haven't I talked to" is asking for.
+    call("note_create", { type: "person", name: "Never Logged" });
+    const stale = call("vault_list", { type: "person", stale_days: 1 }).notes.map(
+      (n: { title: string }) => n.title,
+    );
+    assert.ok(stale.includes("Never Logged"));
+    assert.ok(stale.includes("Jane Doe")); // last entry is months before "today" in this fixture
+  });
+
+  test("stale_days excludes a note logged within the window", () => {
+    call("note_create", { type: "person", name: "Fresh Contact" });
+    call("section_append", {
+      note: "Fresh Contact",
+      section: "Conversation History",
+      content: `| ${daysBefore(today(), 3)} | Call | Caught up |`,
+    });
+    const notes = call("vault_list", { type: "person", stale_days: 14 }).notes.map(
+      (n: { title: string }) => n.title,
+    );
+    assert.ok(!notes.includes("Fresh Contact"));
+  });
+
+  test("stale_days includes a note logged just outside the window", () => {
+    call("note_create", { type: "project", name: "Long Quiet" });
+    call("log_append", {
+      note: "Long Quiet",
+      section: "Activity Log",
+      content: "Kicked off.",
+      date: daysBefore(today(), 20),
+    });
+    const notes = call("vault_list", { type: "project", stale_days: 14 }).notes.map(
+      (n: { title: string }) => n.title,
+    );
+    assert.ok(notes.includes("Long Quiet"));
+  });
+
+  test("stale_days rejects a negative or fractional value", () => {
+    assert.match(callFails("vault_list", { stale_days: -1 }), /whole number of at least 0/);
+    assert.match(callFails("vault_list", { stale_days: 1.5 }), /whole number of at least 0/);
   });
 });
 

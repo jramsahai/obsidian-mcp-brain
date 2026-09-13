@@ -149,7 +149,7 @@ function cronJobs(): CronJob[] {
  */
 describe("cron job prompts", () => {
   test("all jobs are present", () => {
-    assert.equal(cronJobs().length, 4);
+    assert.equal(cronJobs().length, 5);
   });
 
   test("no prompt names a tool or CLI verb that does not exist", () => {

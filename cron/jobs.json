@@ -128,6 +128,35 @@
         "obsidian__*"
       ],
       "message": "Run the user's monthly skill-tuning pass by following the skill-tuning skill exactly — it is the authoritative workflow: read the Corrections log, the last four Reviews/ notes, and the Ignored Links rows added in the last month, cluster repeated corrections by skill and rule, and reply with at most three evidenced proposals (skill file, current wording, proposed wording, evidence with dates, what it does not change) or say plainly that nothing repeated. Read the skill first at <skills-dir>/skill-tuning/SKILL.md, and the shared conventions at <skills-dir>/second-brain/SKILL.md. All vault access is the obsidian__* MCP tools — there is no CLI and no shell fallback; if a tool errors, its message names the fix, so act on it or report plainly rather than finding another way in. Vault 'Obsidian Vault' at ~/Documents/Obsidian Vault/. Read-only: write nothing to the vault, and never apply a proposal yourself — proposals are applied by the user through a pull request that keeps npm test and the behavioral evals green. If this message and the skill ever disagree, the skill wins."
+    },
+    {
+      "id": "<resurfacing-job-id>",
+      "name": "Monthly Resurfacing",
+      "agent": "vault",
+      "schedule": "0 9 15 * *",
+      "timezone": "America/New_York",
+      "tools": [
+        "read",
+        "image_generate",
+        "video_generate",
+        "get_goal",
+        "create_goal",
+        "update_goal",
+        "update_plan",
+        "sessions_list",
+        "sessions_history",
+        "sessions_send",
+        "sessions_spawn",
+        "sessions_yield",
+        "subagents",
+        "session_status",
+        "web_search",
+        "image",
+        "memory_search",
+        "memory_get",
+        "obsidian__*"
+      ],
+      "message": "Run the user's monthly resurfacing pass by following the resurfacing skill exactly — it is the authoritative workflow: list projects, people, and knowledge notes with no dated entry in 90+ days, skip daily/synthesis/review/index/moc notes entirely, cap the run at 15 items oldest-first, and propose one of keep/archive/link-elsewhere per note with the evidence. Read the skill first at <skills-dir>/resurfacing/SKILL.md, and the shared conventions at <skills-dir>/second-brain/SKILL.md. All vault access is the obsidian__* MCP tools — there is no CLI and no shell fallback; if a tool errors, its message names the fix, so act on it or report plainly rather than finding another way in. Vault 'Obsidian Vault' at ~/Documents/Obsidian Vault/. Deliver the numbered list to this channel and stop: write nothing to the vault in this run, and only archive or link a note in a later turn when the user names it explicitly. If this message and the skill ever disagree, the skill wins."
     }
   ]
 }

@@ -5,6 +5,7 @@
  * three chances for the same off-by-one to disagree with itself.
  */
 
+import { isDate } from "./config.ts";
 import { frontmatterEndLine } from "./frontmatter.ts";
 
 export interface Line {
@@ -120,4 +121,42 @@ export function isWordBoundary(line: string, start: number, end: number): boolea
 
 function isWordChar(ch: string): boolean {
   return ch !== "" && /[\p{L}\p{N}_]/u.test(ch);
+}
+
+const DATE_TEXT_RE = /^\d{4}-\d{2}-\d{2}$/;
+
+/**
+ * The latest dated entry actually written into a note's body: a
+ * `### YYYY-MM-DD` log heading (`obsidian__log_append`) or a table row whose
+ * first cell is a date (`obsidian__section_append` into a Date-first table).
+ * Frontmatter (`created`, `date`, `started`) is excluded on purpose — those
+ * describe when a note was made or what day it covers, not when someone last
+ * added to it, and a consolidation pass touches a file's mtime without adding
+ * real content. This is the field `vault_list`'s `stale_days` filter trusts
+ * instead of mtime.
+ *
+ * Computed once per index build rather than per call: every note's content is
+ * already read into memory to parse frontmatter, so this is one more linear
+ * scan of text already in hand, and the index itself is rebuilt at most once
+ * per `CACHE_MS` regardless of how many callers ask — cheaper than re-reading
+ * the file on every `vault_list` call, and no more expensive than the
+ * frontmatter parse it rides alongside.
+ */
+export function lastEntryDate(content: string): string | null {
+  let latest: string | null = null;
+  for (const line of scanLines(content)) {
+    if (line.inFrontmatter || line.inFence) continue;
+    let candidate: string | null = null;
+    if (line.heading && DATE_TEXT_RE.test(line.heading.name.trim())) {
+      candidate = line.heading.name.trim();
+    } else if (!line.heading) {
+      const trimmed = line.text.trim();
+      if (trimmed.startsWith("|")) {
+        const firstCell = trimmed.slice(1).split("|")[0]?.trim() ?? "";
+        if (DATE_TEXT_RE.test(firstCell)) candidate = firstCell;
+      }
+    }
+    if (candidate && isDate(candidate) && (!latest || candidate > latest)) latest = candidate;
+  }
+  return latest;
 }
