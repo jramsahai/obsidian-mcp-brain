@@ -65,6 +65,7 @@ import {
   nearestTitles,
   readNote,
   resolveNote,
+  stripWikilink,
   wikilinkTarget,
   writeNoteGuarded,
   writtenPaths,
@@ -250,7 +251,7 @@ const vaultStatus: ToolDef = {
 const vaultList: ToolDef = {
   name: "vault_list",
   description:
-    "List notes, filtered by frontmatter type, top-level folder, frontmatter status, or modification date. Template notes are excluded unless include_templates=true. Set latest=true to get only the newest date-named note in a folder (use this instead of listing a folder and eyeballing the max filename).",
+    "List notes, filtered by frontmatter type, top-level folder, frontmatter status, linked goal, or modification date. Template notes are excluded unless include_templates=true. Set latest=true to get only the newest date-named note in a folder (use this instead of listing a folder and eyeballing the max filename).",
   inputSchema: {
     type: "object",
     properties: {
@@ -260,6 +261,11 @@ const vaultList: ToolDef = {
       },
       folder: { type: "string", description: "Top-level folder, e.g. Projects, People, Syntheses." },
       status: { type: "string", description: "Frontmatter status filter, e.g. Active, Done." },
+      goal: {
+        type: "string",
+        description:
+          'Frontmatter goal filter — exact name of the linked goal note, e.g. "Ship the handheld". Use with type="project" to find every project working toward one goal.',
+      },
       changed_since: {
         type: "string",
         description: "YYYY-MM-DD. Only notes modified on or after this date.",
@@ -281,6 +287,7 @@ const vaultList: ToolDef = {
     const type = str(args, "type");
     const folder = str(args, "folder");
     const status = str(args, "status");
+    const goal = str(args, "goal");
     const changedSince = str(args, "changed_since");
     const latest = bool(args, "latest");
     const limit = limitArg(args, 100);
@@ -289,6 +296,13 @@ const vaultList: ToolDef = {
     if (!(bool(args, "include_templates") ?? false)) notes = notes.filter((n) => !isTemplate(n));
     if (type) notes = notes.filter((n) => n.type?.toLowerCase() === type.toLowerCase());
     if (status) notes = notes.filter((n) => n.status?.toLowerCase() === status.toLowerCase());
+    if (goal) {
+      const target = goal.trim().toLowerCase();
+      notes = notes.filter((n) => {
+        const value = n.frontmatter.goal;
+        return typeof value === "string" && stripWikilink(value).toLowerCase() === target;
+      });
+    }
     if (folder) {
       const prefix = folder.replace(/\/$/, "").toLowerCase() + "/";
       notes = notes.filter((n) => n.path.toLowerCase().startsWith(prefix));
@@ -1016,7 +1030,7 @@ const noteCreate: ToolDef = {
         type: "string",
         enum: [...NOTE_TYPES],
         description:
-          "project -> Projects/X/X.md; person -> People/First Last.md; meeting -> the project's Meeting Notes folder; doc -> the project's Docs folder, for drafts, research, and references; daily -> Daily/DATE.md; synthesis -> Syntheses/DATE.md; knowledge and moc -> Knowledge Base/TOPIC/; shopping -> Shopping/Store.md; idea -> Ideas/X.md; index -> a folder's own README, e.g. name=\"Knowledge Base\" gives Knowledge Base/README.md; review -> Reviews/YYYY-Www.md, name is the ISO week e.g. \"2026-W37\".",
+          "project -> Projects/X/X.md; person -> People/First Last.md; meeting -> the project's Meeting Notes folder; doc -> the project's Docs folder, for drafts, research, and references; daily -> Daily/DATE.md; synthesis -> Syntheses/DATE.md; knowledge and moc -> Knowledge Base/TOPIC/; shopping -> Shopping/Store.md; idea -> Ideas/X.md; index -> a folder's own README, e.g. name=\"Knowledge Base\" gives Knowledge Base/README.md; review -> Reviews/YYYY-Www.md, name is the ISO week e.g. \"2026-W37\"; goal -> Goals/X.md, what a set of projects is working toward.",
       },
       name: {
         type: "string",
@@ -1080,6 +1094,7 @@ const APPLICABLE_ARGS: Record<NoteType, readonly string[]> = {
   idea: ["name"],
   index: ["name"],
   review: ["name"],
+  goal: ["name"],
 };
 
 const ARG_HINT: Record<string, string> = {
@@ -1528,10 +1543,13 @@ const linkify: ToolDef = {
   },
 };
 
+/** Where note_set_field field="goal" lists the project back, on the goal note. */
+const GOAL_PROJECTS_SECTION = "Projects";
+
 const noteSetField: ToolDef = {
   name: "note_set_field",
   description:
-    "Change one frontmatter field on an existing note — a project's status, a person's role, a note's topics. Which value is right is your call; the server writes the YAML correctly, quoting wikilink lists so Obsidian still counts them as graph edges. Pass an empty value to remove the field. Only these fields can be set: " +
+    "Change one frontmatter field on an existing note — a project's status, a person's role, a project's goal, a note's topics. Which value is right is your call; the server writes the YAML correctly, quoting wikilinks so Obsidian still counts them as graph edges. Setting field=\"goal\" also lists this note under the goal note's `## Projects` section, if that goal note exists and does not already list it — a link the model would otherwise have to remember to write twice. Pass an empty value to remove the field. Only these fields can be set: " +
     SETTABLE_FIELDS.join(", ") +
     ". type, created, date, project, and topic decide where the note lives and cannot be changed this way.",
   inputSchema: {
@@ -1546,7 +1564,7 @@ const noteSetField: ToolDef = {
       value: {
         type: "string",
         description:
-          'New value. For people and projects, a comma-separated list of note names — they become quoted wikilinks. For topics, aliases, and tags, a comma-separated plain list. Empty string removes the field.',
+          'New value. For people and projects, a comma-separated list of note names — they become quoted wikilinks. For goal, a single note name — it becomes a quoted wikilink, e.g. "Ship the handheld". For topics, aliases, and tags, a comma-separated plain list. Empty string removes the field.',
       },
     },
     required: ["note", "field", "value"],
@@ -1562,13 +1580,37 @@ const noteSetField: ToolDef = {
       return { path: note.path, field, changed: false, reason: "already set to that value" };
     }
     writeNoteGuarded(note.path, current.mtimeMs, edit.content);
-    return {
+    const result: Record<string, unknown> = {
       path: note.path,
       field,
       changed: true,
       before: edit.before ?? null,
       cleared: raw === undefined,
     };
+    // The goal <-> project edge has to show from both sides to be visible in the
+    // graph, and a model that just wrote the project's half of it has no reason
+    // to remember the second write on its own turn. Best-effort: a goal note
+    // that does not exist yet is not an error — second-brain/SKILL.md already
+    // treats an unresolved wikilink as fine, and this is one.
+    if (field === "goal" && raw) {
+      const goal = findNoteSafe(raw);
+      if (goal && goal.type === "goal") {
+        const goalNote = readNote(goal);
+        if (findSection(goalNote.content, GOAL_PROJECTS_SECTION)) {
+          const back = appendToSection(
+            goalNote.content,
+            GOAL_PROJECTS_SECTION,
+            `- [[${wikilinkTarget(note)}]]`,
+            { notePath: goal.path },
+          );
+          if (back.changed) writeNoteGuarded(goal.path, goalNote.mtimeMs, back.content);
+          result.goal_backlink = back.changed ? "added" : "already present";
+        }
+      } else {
+        result.goal_backlink = "goal note not found; goal set as an unresolved link";
+      }
+    }
+    return result;
   },
 };
 

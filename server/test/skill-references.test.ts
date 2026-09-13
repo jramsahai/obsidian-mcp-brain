@@ -248,7 +248,7 @@ describe("skill tool references", () => {
       'obsidian__daily_log section="Key Conversations" is not one of: Mood / Energy, Weather, Exercise, Media, Food, Purchases, Random Thoughts',
     ]);
     assert.deepEqual(lintSkillDocument('`obsidian__note_create type="blogpost" name="x"`'), [
-      `obsidian__note_create type="blogpost" is not one of: project, person, meeting, doc, daily, synthesis, knowledge, moc, shopping, idea, index, review`,
+      `obsidian__note_create type="blogpost" is not one of: project, person, meeting, doc, daily, synthesis, knowledge, moc, shopping, idea, index, review, goal`,
     ]);
     assert.deepEqual(lintSkillDocument('`obsidian__vault_links direction="backlinks"`'), [
       'obsidian__vault_links direction="backlinks" is not one of: in, out, unresolved, ignored, orphans, deadends',

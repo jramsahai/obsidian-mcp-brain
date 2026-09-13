@@ -272,6 +272,105 @@ describe("note_create review type", () => {
   });
 });
 
+describe("note_create goal type", () => {
+  test("derives Goals/X.md so [[X]] resolves", () => {
+    const result = call("note_create", { type: "goal", name: "Ship the Handheld" });
+    assert.equal(result.path, "Goals/Ship the Handheld.md");
+    assert.ok(existsSync(join(root, result.path)));
+  });
+
+  test("frontmatter defaults status to active and carries created", () => {
+    call("note_create", { type: "goal", name: "Ship the Handheld" });
+    const content = read(root, "Goals/Ship the Handheld.md");
+    const frontmatter = content.split("---")[1].trim().split("\n");
+    assert.deepEqual(frontmatter, ["type: goal", "status: active", `created: ${today()}`]);
+  });
+
+  test("horizon is optional free text, carried through fields", () => {
+    call("note_create", {
+      type: "goal",
+      name: "Ship the Handheld",
+      fields: { horizon: "2026-Q4" },
+    });
+    assert.match(read(root, "Goals/Ship the Handheld.md"), /horizon: 2026-Q4/);
+  });
+
+  test("a passed status overrides the active default", () => {
+    call("note_create", { type: "goal", name: "Ship the Handheld", fields: { status: "achieved" } });
+    assert.match(read(root, "Goals/Ship the Handheld.md"), /status: achieved/);
+  });
+
+  test("sections are laid out in order", () => {
+    const result = call("note_create", { type: "goal", name: "Ship the Handheld" });
+    assert.deepEqual(result.sections, ["Why", "What done looks like", "Projects", "Log"]);
+  });
+
+  test("a repeat call changes nothing", () => {
+    call("note_create", { type: "goal", name: "Ship the Handheld" });
+    const first = read(root, "Goals/Ship the Handheld.md");
+    const result = call("note_create", { type: "goal", name: "Ship the Handheld" });
+    assert.equal(result.created, false);
+    assert.equal(read(root, "Goals/Ship the Handheld.md"), first);
+  });
+});
+
+describe("note_set_field goal field", () => {
+  test("quotes the goal as a single wikilink and back-links the project once", () => {
+    call("note_create", { type: "goal", name: "Ship the Handheld" });
+    const result = call("note_set_field", {
+      note: "Example Project",
+      field: "goal",
+      value: "Ship the Handheld",
+    });
+    assert.equal(result.changed, true);
+    assert.equal(result.goal_backlink, "added");
+    assert.match(
+      read(root, "Projects/Example Project/Example Project.md"),
+      /goal: "\[\[Ship the Handheld\]\]"/,
+    );
+    assert.match(
+      read(root, "Goals/Ship the Handheld.md"),
+      /## Projects\n\n- \[\[Example Project\]\]/,
+    );
+
+    // Setting the same value again is a no-op, so the back-link is not doubled.
+    const again = call("note_set_field", {
+      note: "Example Project",
+      field: "goal",
+      value: "Ship the Handheld",
+    });
+    assert.equal(again.changed, false);
+    const occurrences =
+      read(root, "Goals/Ship the Handheld.md").match(/\[\[Example Project\]\]/g) ?? [];
+    assert.equal(occurrences.length, 1);
+  });
+
+  test("a goal that does not exist yet still sets the field, as an unresolved link", () => {
+    const result = call("note_set_field", {
+      note: "Example Project",
+      field: "goal",
+      value: "Not Yet Created",
+    });
+    assert.equal(result.changed, true);
+    assert.equal(result.goal_backlink, "goal note not found; goal set as an unresolved link");
+    assert.match(
+      read(root, "Projects/Example Project/Example Project.md"),
+      /goal: "\[\[Not Yet Created\]\]"/,
+    );
+  });
+});
+
+describe("vault_list goal filter", () => {
+  test("finds projects working toward one goal by exact name", () => {
+    call("note_create", { type: "goal", name: "Ship the Handheld" });
+    call("note_set_field", { note: "Example Project", field: "goal", value: "Ship the Handheld" });
+    const result = call("vault_list", { type: "project", goal: "Ship the Handheld" });
+    assert.equal(result.total, 1);
+    assert.equal(result.notes[0].title, "Example Project");
+    assert.equal(call("vault_list", { type: "project", goal: "No Such Goal" }).total, 0);
+  });
+});
+
 describe("daily_log", () => {
   test("creates the daily note from the template when it is missing", () => {
     const result = call("daily_log", {

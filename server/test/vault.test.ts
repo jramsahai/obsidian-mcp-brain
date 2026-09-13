@@ -212,6 +212,11 @@ describe("vault_status", () => {
     call("note_create", { type: "review", name: "2026-W31" });
     assert.equal(call("vault_status").last_review_week, "2026-W31");
   });
+
+  test("counts_by_type picks up the goal type without any special-casing", () => {
+    call("note_create", { type: "goal", name: "Ship the Handheld" });
+    assert.equal(call("vault_status").counts_by_type.goal, 1);
+  });
 });
 
 describe("section_append", () => {
