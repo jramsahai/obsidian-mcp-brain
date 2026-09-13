@@ -80,6 +80,7 @@ The drift lint is the reason the prose and the tools stay in sync: it fails the 
 Vault/
 ├── Inbox.md            # unrouted captures
 ├── Tasks.md            # central checkbox tasks
+├── Corrections.md      # log of corrections the user made
 ├── Standup.md          # last generated standup
 ├── Daily/YYYY-MM-DD.md
 ├── Projects/[Name]/[Name].md
