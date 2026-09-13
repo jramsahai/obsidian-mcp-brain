@@ -70,12 +70,17 @@ const MONTH_NAMES = [
   "december",
 ];
 
-/** Both "september" and "sep" map to 9, so one lookup handles either spelling. */
+/**
+ * "september", "sep", and "sept" all map to 9, so one lookup handles every
+ * spelling people actually dictate — "sept" is the one four-letter
+ * abbreviation in common use.
+ */
 const MONTH_LOOKUP = new Map<string, number>();
 MONTH_NAMES.forEach((name, i) => {
   MONTH_LOOKUP.set(name, i + 1);
   MONTH_LOOKUP.set(name.slice(0, 3), i + 1);
 });
+MONTH_LOOKUP.set("sept", 9);
 
 // Longest names first so "june" is tried before its own prefix "jun" would be.
 const MONTH_PATTERN = [...MONTH_LOOKUP.keys()].sort((a, b) => b.length - a.length).join("|");

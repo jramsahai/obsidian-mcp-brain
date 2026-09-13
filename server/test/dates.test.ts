@@ -226,3 +226,8 @@ describe("date_resolve tool", () => {
     );
   });
 });
+
+test('"sept" is accepted as a month abbreviation, like "sep"', () => {
+  assert.equal(resolveDateExpression("sept 14", "2026-09-13").date, "2026-09-14");
+  assert.equal(resolveDateExpression("14 sept", "2026-09-13").date, "2026-09-14");
+});
