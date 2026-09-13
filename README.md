@@ -2,6 +2,8 @@
 
 A set of agent skills for running a personal "second brain" in an [Obsidian](https://obsidian.md) vault: capture, routing, linking, and nightly consolidation, driven by an AI agent instead of manual filing.
 
+This repo is the core of a larger setup — a vault, an agent, and optionally a voice front end and a handheld — described in [The whole system](#the-whole-system) at the end.
+
 ## The skills
 
 | Skill | Role |
@@ -91,3 +93,38 @@ Vault/
 ```
 
 Folders are created on first use; no scaffolding step required.
+
+## The whole system
+
+The skills and server above are the part that matters: an agent that files, links, and
+recalls on your behalf, with every write shaped by code. The rest is how you reach it.
+
+```text
+you ── speak ──▶ handheld / phone / laptop
+                        │  HTTP, PCM audio
+                        ▼
+                agent-voice-bridge          local STT, local TTS, one adapter per agent
+                        │  text turn
+                        ▼
+                  agent (OpenClaw, Hermes, or any CLI)
+                        │  loads these skills, runs the MCP server
+                        ▼
+                  obsidian MCP server ──▶ Obsidian vault (git-tracked)
+```
+
+| Piece | Repo | Required? |
+|---|---|---|
+| Skills + Obsidian MCP server | this repo | yes |
+| Agent harness that loads skills and runs MCP servers | OpenClaw, Claude Code, Hermes, … | yes, pick one |
+| Obsidian vault | yours; never shared | yes |
+| Push-to-talk voice bridge (browser client, reference CLI, versioned HTTP API) | [`agent-voice-bridge`](https://github.com/jramsahai/agent-voice-bridge) | no — typing works |
+| ESP32-S3 handheld that speaks the voice bridge's API over Tailscale | separate firmware project, not yet published | no |
+
+The voice bridge knows nothing about Obsidian and the skills know nothing about voice.
+Their only contact is the agent in the middle: a spoken "add milk to the Costco list" becomes
+a text turn, the agent picks the `shopping-list` skill, and `obsidian__checklist_set` does
+the write. Swap any layer without touching the others.
+
+## License
+
+MIT — see [LICENSE](./LICENSE).
