@@ -11,6 +11,7 @@ import {
   today,
   ToolError,
 } from "./config.ts";
+import { computeCalibration } from "./calibrate.ts";
 import { setChecklistItem } from "./checklist.ts";
 import {
   CORRECTIONS_FILE,
