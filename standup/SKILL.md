@@ -17,7 +17,7 @@ Use the shared vault conventions and the `obsidian__*` tool surface from `second
 
 Read from:
 
-- `Tasks.md` for checkbox tasks: due dates, priorities, waiting states, project wikilinks. Read it with `obsidian__vault_read note="Tasks"`; a completion date on a line is the record that the work finished.
+- Task state: `obsidian__task_query`, not a hand-read of `Tasks.md` — `overdue=true` for overdue tasks, `due_before="YYYY-MM-DD"` (today plus 5 days) for due-soon, `section="Waiting On Me"` for tasks waiting on the user, `status="waiting"` for tasks waiting on others. Fall back to `obsidian__vault_read note="Tasks"` only when a section's full wording or layout matters beyond what the query fields give you.
 - `Projects/*/[Project Name].md` for project status (frontmatter `status:`), blockers, decisions, waiting items, and related tasks.
 - `People/*.md` only when pending conversations or waiting-on people need context.
 - `Inbox.md` for unprocessed actionable captures.
@@ -31,8 +31,8 @@ A missing note or an empty result is the answer, not a malfunction — no daily 
 
 When asked to run standup, or when invoked by cron:
 
-1. `obsidian__vault_status` — today's local date, note counts, the latest synthesis and daily dates, and what changed recently. This replaces the old exploratory preamble; do not rediscover any of it by hand.
-2. `obsidian__vault_read note="Tasks"` for the full task list.
+1. `obsidian__vault_status` — today's local date, note counts, the latest synthesis and daily dates, task counts, and what changed recently. This replaces the old exploratory preamble; do not rediscover any of it by hand.
+2. `obsidian__task_query overdue=true` for overdue tasks; `obsidian__task_query due_after="YYYY-MM-DD" due_before="YYYY-MM-DD"` (today through today plus 5 days) for due-soon tasks; `obsidian__task_query section="Waiting On Me"` for tasks waiting on the user; `obsidian__task_query status="waiting"` for tasks waiting on others.
 3. `obsidian__vault_list type="project" status="Active"` for the active projects, then `obsidian__vault_read` each one worth reporting on.
 4. Reconcile projects and tasks by exact project name / wikilink.
 5. `obsidian__vault_read` the latest synthesis named by step 1, if there is one.

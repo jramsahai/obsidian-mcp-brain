@@ -1,4 +1,4 @@
-import { assertDate, config, localTimestamp, modifiedOn, ToolError, today } from "./config.ts";
+import { addDays, assertDate, config, localTimestamp, modifiedOn, ToolError, today } from "./config.ts";
 import { setChecklistItem } from "./checklist.ts";
 import {
   CORRECTIONS_FILE,
@@ -190,7 +190,7 @@ function resolveWritable(ref: string, options: { allowTasks?: boolean } = {}): N
 const vaultStatus: ToolDef = {
   name: "vault_status",
   description:
-    "Vault orientation in one call: today's local date, git dirty state, note counts by type, latest synthesis, daily note, and review week, unresolved/orphan link counts, and notes changed in the last 24 hours. Call this first in any standup, weekly review, or nightly run instead of exploring the vault by hand. git_error is non-null when git is enabled but unusable — snapshots will fail until it is fixed.",
+    "Vault orientation in one call: today's local date, git dirty state, note counts by type, latest synthesis, daily note, and review week, unresolved/orphan link counts, task counts, and notes changed in the last 24 hours. Call this first in any standup, weekly review, or nightly run instead of exploring the vault by hand. git_error is non-null when git is enabled but unusable — snapshots will fail until it is fixed.",
   inputSchema: { type: "object", properties: {}, additionalProperties: false },
   handler: () => {
     const cfg = config();
@@ -220,9 +220,13 @@ const vaultStatus: ToolDef = {
         .map((n) => n.title)
         .sort()
         .pop() ?? null;
+    const todayStr = today(cfg);
+    const tasksDoc = parseTasksDoc(readNote(resolveNote(TASKS_FILE)).content);
+    const openTasks = tasksDoc.tasks.filter((t) => !t.done);
+    const weekOut = addDays(todayStr, 7);
 
     return {
-      today: today(cfg),
+      today: todayStr,
       timezone: cfg.timezone,
       total_notes: idx.notes.length,
       counts_by_type: counts,
@@ -236,6 +240,14 @@ const vaultStatus: ToolDef = {
       ignored_count: graph.ignored.size,
       orphan_count: orphans.length,
       corrections_count: correctionRows().length,
+      tasks: {
+        open: openTasks.length,
+        overdue: openTasks.filter((t) => taskIsOverdue(t, todayStr)).length,
+        due_in_7_days: openTasks.filter(
+          (t) => t.due !== undefined && t.due >= todayStr && t.due <= weekOut,
+        ).length,
+        waiting: openTasks.filter(taskIsWaiting).length,
+      },
       changed_last_24h: changed,
       git_enabled: cfg.gitEnabled,
       // "off" and "on but broken" both used to report git_dirty: null, which
@@ -969,6 +981,131 @@ const taskUpdate: ToolDef = {
 function has(args: Record<string, unknown>, key: string): boolean {
   return Object.prototype.hasOwnProperty.call(args, key) && args[key] !== null;
 }
+
+const TASK_STATUSES = ["open", "done", "waiting", "all"] as const;
+type TaskStatus = (typeof TASK_STATUSES)[number];
+
+/** Waiting on someone else, and not yet resolved. Shared with vault_status's count. */
+function taskIsWaiting(task: Task): boolean {
+  return !task.done && task.waitingOn !== undefined;
+}
+
+function taskIsOverdue(task: Task, todayStr: string): boolean {
+  return !task.done && task.due !== undefined && task.due < todayStr;
+}
+
+/** `TASK_SECTIONS` index, for sorting; unknown section names sort last. */
+function sectionRank(name: string): number {
+  const i = TASK_SECTIONS.findIndex((s) => s.toLowerCase() === name.toLowerCase());
+  return i === -1 ? TASK_SECTIONS.length : i;
+}
+
+const taskQuery: ToolDef = {
+  name: "task_query",
+  description:
+    "Query Tasks.md by state instead of reading and eyeballing the whole file. Filter by status, project, due-date range, completion date, overdue-ness, who a task is waiting on, or section, and get back parsed fields for each match. Resolve any relative date (\"friday\", \"in 5 days\") to YYYY-MM-DD before calling.",
+  inputSchema: {
+    type: "object",
+    properties: {
+      status: {
+        type: "string",
+        enum: [...TASK_STATUSES],
+        description:
+          "open: not done (default). done: completed. waiting: open and waiting on someone else. all: no status filter.",
+      },
+      project: { type: "string", description: "Exact existing project name." },
+      due_before: {
+        type: "string",
+        description: "YYYY-MM-DD. Only dated tasks due on or before this date.",
+      },
+      due_after: {
+        type: "string",
+        description: "YYYY-MM-DD. Only dated tasks due on or after this date.",
+      },
+      completed_since: {
+        type: "string",
+        description: "YYYY-MM-DD. Only tasks completed on or after this date.",
+      },
+      overdue: {
+        type: "boolean",
+        description:
+          "true restricts to tasks that are open, dated, and due strictly before today, regardless of status.",
+      },
+      waiting_on: { type: "string", description: "Person's note name a task is waiting on." },
+      section: {
+        type: "string",
+        enum: [...TASK_SECTIONS],
+        description: "Restrict to one Tasks.md section.",
+      },
+      limit: { type: "number", minimum: 1, description: "Maximum tasks to return. Default 200." },
+    },
+    additionalProperties: false,
+  },
+  handler: (args) => {
+    const status = (enumArg(args, "status", TASK_STATUSES) ?? "open") as TaskStatus;
+    const project = str(args, "project");
+    const dueBefore = str(args, "due_before")
+      ? assertDate(req(args, "due_before"), "due_before")
+      : undefined;
+    const dueAfter = str(args, "due_after")
+      ? assertDate(req(args, "due_after"), "due_after")
+      : undefined;
+    const completedSince = str(args, "completed_since")
+      ? assertDate(req(args, "completed_since"), "completed_since")
+      : undefined;
+    const overdue = bool(args, "overdue") ?? false;
+    const waitingOn = str(args, "waiting_on");
+    const section = enumArg(args, "section", TASK_SECTIONS);
+    const limit = limitArg(args, 200);
+    const todayStr = today();
+
+    const doc = parseTasksDoc(readNote(resolveNote(TASKS_FILE)).content);
+    let tasks = doc.tasks;
+    if (status === "open") tasks = tasks.filter((t) => !t.done);
+    else if (status === "done") tasks = tasks.filter((t) => t.done);
+    else if (status === "waiting") tasks = tasks.filter(taskIsWaiting);
+    if (project) tasks = tasks.filter((t) => t.project?.toLowerCase() === project.toLowerCase());
+    if (dueBefore) tasks = tasks.filter((t) => t.due !== undefined && t.due <= dueBefore);
+    if (dueAfter) tasks = tasks.filter((t) => t.due !== undefined && t.due >= dueAfter);
+    if (completedSince) {
+      tasks = tasks.filter((t) => t.completed !== undefined && t.completed >= completedSince);
+    }
+    if (overdue) tasks = tasks.filter((t) => taskIsOverdue(t, todayStr));
+    if (waitingOn) {
+      tasks = tasks.filter((t) => t.waitingOn?.toLowerCase() === waitingOn.toLowerCase());
+    }
+    if (section) tasks = tasks.filter((t) => t.section.toLowerCase() === section.toLowerCase());
+
+    // Due date ascending, undated last; section order breaks ties (including
+    // among every undated task), then original file order.
+    const sorted = [...tasks].sort((a, b) => {
+      if (a.due === undefined && b.due !== undefined) return 1;
+      if (a.due !== undefined && b.due === undefined) return -1;
+      if (a.due !== undefined && b.due !== undefined && a.due !== b.due) {
+        return a.due < b.due ? -1 : 1;
+      }
+      const rank = sectionRank(a.section) - sectionRank(b.section);
+      return rank !== 0 ? rank : a.line - b.line;
+    });
+
+    return {
+      today: todayStr,
+      count: sorted.length,
+      tasks: sorted.slice(0, limit).map((t) => ({
+        text: t.text,
+        project: t.project ?? null,
+        due: t.due ?? null,
+        priority: t.priority,
+        done: t.done,
+        completed: t.completed ?? null,
+        waiting_on: t.waitingOn ?? null,
+        waiting_since: t.waitingSince ?? null,
+        section: t.section,
+        line: t.line,
+      })),
+    };
+  },
+};
 
 const SNAPSHOT_SCOPES = ["machine", "all"] as const;
 
@@ -1874,6 +2011,7 @@ export const TOOLS: ToolDef[] = [
   logRemove,
   taskAdd,
   taskUpdate,
+  taskQuery,
   dailyLog,
   checklistSet,
   relate,
