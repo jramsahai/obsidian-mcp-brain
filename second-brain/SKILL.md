@@ -37,6 +37,8 @@ Call `obsidian__vault_status` first in any scheduled or exploratory run. It answ
 | Log a personal journal entry | `obsidian__daily_log` |
 | Add, merge, or check off a checkbox item | `obsidian__checklist_set` |
 | Record that two notes are connected | `obsidian__relate` |
+| Log a correction the user made | `obsidian__correction_log` |
+| See correction counts and patterns | `obsidian__corrections_summary` |
 | Move an item out of an inbox | `obsidian__inbox_route` |
 | Drop an inbox line already captured elsewhere | `obsidian__inbox_clear` |
 | Change one frontmatter field | `obsidian__note_set_field` |
@@ -81,6 +83,7 @@ Ideas/[Idea Name].md            pre-project idea notes with scorecards
 Syntheses/YYYY-MM-DD.md         nightly consolidation synthesis notes
 Schedule/                       future calendar-related notes
 Tasks.md                        centralized checkbox task list
+Corrections.md                  log of corrections the user made, for counting patterns
 Inbox.md                        quick capture for unprocessed items
 Standup.md                      generated standup output
 README.md                       system documentation
@@ -161,6 +164,10 @@ Route to the narrowest matching skill:
 - Quick captures that are not clearly classifiable -> append to `Inbox.md` and ask only if routing would be risky.
 
 When a request crosses boundaries, use each relevant skill in order. Example: `I talked to Sam about Project X and need to send the proposal Friday` should update people notes, project tracking, and task tracking.
+
+## When The User Corrects You
+
+If the user corrects something the agent did, log it before doing anything else: `obsidian__correction_log skill="task-tracking" did="marked the task done from a status update" wanted="wait for explicit completion language"`. One call per correction — `did` and `wanted` in plain words, naming the skill that was in play. Then apply the fix. Never re-litigate: the correction is recorded, so there is nothing left to argue.
 
 ## Knowledge Base Boundary
 

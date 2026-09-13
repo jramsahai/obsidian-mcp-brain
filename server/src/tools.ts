@@ -1,5 +1,11 @@
 import { assertDate, config, localTimestamp, modifiedOn, ToolError, today } from "./config.ts";
 import { setChecklistItem } from "./checklist.ts";
+import {
+  CORRECTIONS_FILE,
+  CORRECTIONS_SECTION,
+  correctionRows,
+  ensureCorrectionsLog,
+} from "./corrections.ts";
 import { parseNote } from "./frontmatter.ts";
 import {
   ensureIgnoreList,
@@ -222,6 +228,7 @@ const vaultStatus: ToolDef = {
       // audit. `vault_links direction="ignored"` lists them.
       ignored_count: graph.ignored.size,
       orphan_count: orphans.length,
+      corrections_count: correctionRows().length,
       changed_last_24h: changed,
       git_enabled: cfg.gitEnabled,
       // "off" and "on but broken" both used to report git_dirty: null, which
@@ -1726,6 +1733,127 @@ const linkIgnore: ToolDef = {
   },
 };
 
+const KEBAB_CASE_RE = /^[a-z0-9]+(-[a-z0-9]+)*$/;
+
+const correctionLog: ToolDef = {
+  name: "correction_log",
+  description:
+    "Record that the user corrected the agent, so the lesson survives past the fix. Log it first, then apply the fix — never re-litigate. Appends one row to Corrections.md, creating it on first use. An exact repeat of an existing row is skipped; two different corrections on the same day both land.",
+  inputSchema: {
+    type: "object",
+    properties: {
+      skill: {
+        type: "string",
+        description: 'The skill that was in play, kebab-case, e.g. "task-tracking".',
+      },
+      did: { type: "string", description: "What the agent did, in plain words." },
+      wanted: { type: "string", description: "What the user wanted instead, in plain words." },
+      rule: {
+        type: "string",
+        description: "The skill rule this bears on, in your own words. Optional.",
+      },
+      date: { type: "string", description: "YYYY-MM-DD. Defaults to today in the vault's timezone." },
+    },
+    required: ["skill", "did", "wanted"],
+    additionalProperties: false,
+  },
+  handler: (args) => {
+    const skill = plainText(req(args, "skill"));
+    const did = plainText(req(args, "did"));
+    const wanted = plainText(req(args, "wanted"));
+    const rule = str(args, "rule") ? plainText(req(args, "rule")) : "";
+    const date = str(args, "date") ? assertDate(req(args, "date"), "date") : today();
+
+    if (!KEBAB_CASE_RE.test(skill)) {
+      throw new ToolError(
+        `skill must be kebab-case (lowercase words joined with "-"), e.g. "task-tracking"; got "${skill}".`,
+      );
+    }
+    if (!did) throw new ToolError("did is empty; say what the agent did.");
+    if (!wanted) throw new ToolError("wanted is empty; say what the user wanted instead.");
+
+    ensureCorrectionsLog();
+    const note = resolveNote(CORRECTIONS_FILE);
+    const current = readNote(note);
+    const result = appendToSection(
+      current.content,
+      CORRECTIONS_SECTION,
+      `| ${date} | ${skill} | ${did} | ${wanted} | ${rule} |`,
+      {
+        dedupe: true,
+        notePath: note.path,
+        // The near-duplicate guard's row-key shortcut (similar.ts) treats a
+        // row's first cell as its identity and calls two rows "different
+        // subjects" the moment that cell differs. Every row here leads with
+        // the date, so two genuinely separate corrections logged the same day
+        // share that cell and the shortcut never fires for them — the guard
+        // would then fall through to plain wording overlap, which is exactly
+        // the false-positive risk of blocking a second, unrelated correction.
+        // The exact-repeat check just above this option runs regardless, so a
+        // true replay is still caught; allow_similar only waives the
+        // wording-overlap guess for the same-day case it cannot judge.
+        allowSimilar: true,
+      },
+    );
+    if (!result.changed) {
+      return { path: note.path, logged: false, reason: result.reason };
+    }
+    writeNoteGuarded(note.path, current.mtimeMs, result.content);
+    return { path: note.path, logged: true, date, skill };
+  },
+};
+
+const correctionsSummary: ToolDef = {
+  name: "corrections_summary",
+  description:
+    "Summarize corrections logged with correction_log: total count, grouped by skill (with the rules each cites and how often), and the 5 most recent rows. Filter with since and/or skill. An empty or missing log returns zeros, not an error.",
+  inputSchema: {
+    type: "object",
+    properties: {
+      since: { type: "string", description: "YYYY-MM-DD. Only corrections on or after this date." },
+      skill: { type: "string", description: 'Limit to one skill, e.g. "task-tracking".' },
+    },
+    additionalProperties: false,
+  },
+  handler: (args) => {
+    const since = str(args, "since") ? assertDate(req(args, "since"), "since") : undefined;
+    const skill = str(args, "skill");
+
+    let rows = correctionRows();
+    if (since) rows = rows.filter((r) => r.date >= since);
+    if (skill) rows = rows.filter((r) => r.skill.toLowerCase() === skill.toLowerCase());
+
+    const bySkill = new Map<
+      string,
+      { count: number; last_date: string; rules: Map<string, number> }
+    >();
+    for (const row of rows) {
+      const entry = bySkill.get(row.skill) ?? { count: 0, last_date: row.date, rules: new Map() };
+      entry.count++;
+      if (row.date > entry.last_date) entry.last_date = row.date;
+      if (row.rule) entry.rules.set(row.rule, (entry.rules.get(row.rule) ?? 0) + 1);
+      bySkill.set(row.skill, entry);
+    }
+
+    const by_skill = [...bySkill.entries()]
+      .map(([skillName, entry]) => ({
+        skill: skillName,
+        count: entry.count,
+        last_date: entry.last_date,
+        rules: [...entry.rules.entries()]
+          .map(([rule, count]) => ({ rule, count }))
+          .sort((a, b) => b.count - a.count),
+      }))
+      .sort((a, b) => b.count - a.count);
+
+    return {
+      total: rows.length,
+      by_skill,
+      recent: rows.slice(-5).reverse(),
+    };
+  },
+};
+
 export const TOOLS: ToolDef[] = [
   vaultStatus,
   vaultList,
@@ -1742,6 +1870,8 @@ export const TOOLS: ToolDef[] = [
   checklistSet,
   relate,
   linkIgnore,
+  correctionLog,
+  correctionsSummary,
   inboxRoute,
   linkify,
   noteSetField,
