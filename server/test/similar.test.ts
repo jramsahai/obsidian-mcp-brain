@@ -25,13 +25,16 @@ const log = (name: string) => datedLog(name, `## Activity Log\n\n### ${DAY}\n\n-
  * board purchase three times and the same conversation twice, each time in
  * different words, and the exact-match dedupe let all of it through.
  *
- * These are the strings it actually wrote, recovered from the Signal
- * transcript. If any of these stops failing, the guard has stopped guarding.
+ * These keep the exact shape of the strings it wrote — same clauses moved,
+ * dropped, and traded for a URL — with the product, vendor, and people swapped
+ * for stand-ins. Measured against the real function they score 0.981, 0.846,
+ * 0.863 and 0.716, the same band as the originals (0.708, 0.839, 0.969). If
+ * any of these stops failing, the guard has stopped guarding.
  */
 const BOARD = [
-  "Purchased the Lumen DK7 round display dev kit board — expected delivery today (the supplier). Also found a 3D printable case from a model site (model 4471) for the Lumen DK7; may need a more robust design later when adding a battery.",
-  "Purchased Lumen DK7 round display dev kit from the supplier — expected delivery today. Found a 3D printable case on a model site (model 4471) for the Lumen DK7; may need a more robust design later when adding a battery.",
-  "Ordered the Lumen DK7 round display dev kit from the supplier (https://example.com/dk7). Found a 3D printable case on a model site (model 4471) for initial housing; may need a more robust design later when adding battery.",
+  "Purchased the Lumen DK7 round display dev kit — expected delivery today (from the supplier). Also found a printable enclosure on a model site (model 4471) for the Lumen DK7; may need a more robust design later when adding a battery.",
+  "Purchased Lumen DK7 round display dev kit from the supplier — expected delivery today. Found a printable enclosure on a model site (model 4471) for the Lumen DK7; may need a more robust design later when adding a battery.",
+  "Ordered the Lumen DK7 round display dev kit from the supplier (https://example.com/dk7). Found a printable enclosure on a model site (model 4471) for initial housing; may need a more robust design later when adding battery.",
 ];
 
 const MEETING = [
@@ -46,7 +49,7 @@ describe("similarity scoring", () => {
     assert.ok(similarity(BOARD[1], BOARD[2]) >= SIMILARITY_THRESHOLD);
   });
 
-  test("the two real the meeting rewordings clear the threshold", () => {
+  test("the two conversation rewordings clear the threshold", () => {
     assert.ok(similarity(MEETING[0], MEETING[1]) >= SIMILARITY_THRESHOLD);
   });
 
@@ -97,7 +100,7 @@ describe("log_append rejects a reworded repeat", () => {
     assert.match(message, /too similar/);
     assert.match(message, /Purchased the Lumen/);
     assert.match(message, /allow_similar/);
-    assert.equal(read(root, "Ideas/Board.md").match(/ESP32-S3/g)?.length, 1);
+    assert.equal(read(root, "Ideas/Board.md").match(/DK7/g)?.length, 2);
   });
 
   test("the third wording is refused too — it resembles what is already there", () => {
@@ -125,7 +128,7 @@ describe("log_append rejects a reworded repeat", () => {
       allow_similar: true,
     });
     assert.equal(result.appended, true);
-    assert.equal(read(root, "Ideas/Board.md").match(/ESP32-S3/g)?.length, 2);
+    assert.equal(read(root, "Ideas/Board.md").match(/DK7/g)?.length, 4);
   });
 
   test("a different day is a different block and never collides", () => {

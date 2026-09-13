@@ -4,9 +4,9 @@
  * The exact-match dedupe in sections.ts guards against a call being replayed
  * verbatim. It never fired in production, because a model that repeats itself
  * does not repeat itself *verbatim* — it regenerates. On 2026-08-02 a single
- * turn wrote the same board purchase three times ("Purchased the … board",
- * "Purchased … from the supplier", "Ordered the … from the supplier"), and the same
- * Jordan Lee conversation twice, all of it past a guard that was on by default.
+ * turn wrote the same board purchase three times ("Purchased the … kit",
+ * "Purchased … from the supplier", "Ordered the … from the supplier"), and the
+ * same conversation twice, all of it past a guard that was on by default.
  *
  * Threshold chosen from the vault, not from taste. Scored against every pair of
  * entries that already coexist inside one `### YYYY-MM-DD` block — 1273 pairs,
@@ -89,8 +89,8 @@ function rowKey(line: string): string | null {
  *   shared date link means these sets overlap, so overlap cannot be the test;
  *   any difference in what an entry points at makes it a different entry.
  *
- * A duplicate agrees on all of them: both the meeting rows led with 2026-08-02 and
- * named exactly [[Example Project]], and the three board entries carried no
+ * A duplicate agrees on all of them: both conversation rows led with 2026-08-02
+ * and named exactly [[Example Project]], and the three board entries carried no
  * date, no row key, and no links at all.
  */
 function differentSubjects(a: string, b: string): boolean {

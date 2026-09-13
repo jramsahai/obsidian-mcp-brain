@@ -80,10 +80,10 @@ describe("candidates are reports, not demand", () => {
 });
 
 describe("link_ignore", () => {
-  const args = { target: "Frobnix", reason: "OS the user runs, not a topic tracked here" };
+  const args = { target: "Frobnix", reason: "tool tried once, not a topic tracked here" };
 
   test("retires a target out of unresolved and into ignored", () => {
-    writeSynthesis("2026-07-25", { observations: "- Flashed [[Frobnix]] on the old phone." });
+    writeSynthesis("2026-07-25", { observations: "- Tried [[Frobnix]] for a day and dropped it." });
     assert.ok(unresolvedTargets().includes("Frobnix"));
 
     call("link_ignore", args);
@@ -96,7 +96,7 @@ describe("link_ignore", () => {
   });
 
   test("suppression is never silent", () => {
-    writeSynthesis("2026-07-25", { observations: "- Flashed [[Frobnix]] on the old phone." });
+    writeSynthesis("2026-07-25", { observations: "- Tried [[Frobnix]] for a day and dropped it." });
     call("link_ignore", args);
     assert.equal(call("vault_status").ignored_count, 1);
     assert.equal(call("vault_links", { direction: "unresolved" }).ignored_excluded, 1);
