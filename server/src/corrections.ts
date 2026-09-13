@@ -23,6 +23,12 @@ export interface CorrectionRow {
   rule: string;
 }
 
+export interface CorrectionsSummary {
+  total: number;
+  by_skill: { skill: string; count: number; last_date: string; rules: { rule: string; count: number }[] }[];
+  recent: CorrectionRow[];
+}
+
 /** The note as it is first written. Sections match what `correction_log` appends to. */
 export function initialContent(date: string = today()): string {
   return [
@@ -84,4 +90,44 @@ export function correctionRows(): CorrectionRow[] {
     });
   }
   return rows;
+}
+
+/**
+ * The shape `corrections_summary` returns, factored out so `vault_signals` can
+ * reuse the exact same grouping over its own `since` window instead of
+ * reimplementing it.
+ */
+export function summarizeCorrections(
+  rows: readonly CorrectionRow[],
+  options: { since?: string; skill?: string } = {},
+): CorrectionsSummary {
+  let filtered = rows;
+  if (options.since) filtered = filtered.filter((r) => r.date >= options.since!);
+  if (options.skill) filtered = filtered.filter((r) => r.skill.toLowerCase() === options.skill!.toLowerCase());
+
+  const bySkill = new Map<string, { count: number; last_date: string; rules: Map<string, number> }>();
+  for (const row of filtered) {
+    const entry = bySkill.get(row.skill) ?? { count: 0, last_date: row.date, rules: new Map() };
+    entry.count++;
+    if (row.date > entry.last_date) entry.last_date = row.date;
+    if (row.rule) entry.rules.set(row.rule, (entry.rules.get(row.rule) ?? 0) + 1);
+    bySkill.set(row.skill, entry);
+  }
+
+  const by_skill = [...bySkill.entries()]
+    .map(([skillName, entry]) => ({
+      skill: skillName,
+      count: entry.count,
+      last_date: entry.last_date,
+      rules: [...entry.rules.entries()]
+        .map(([rule, count]) => ({ rule, count }))
+        .sort((a, b) => b.count - a.count),
+    }))
+    .sort((a, b) => b.count - a.count);
+
+  return {
+    total: filtered.length,
+    by_skill,
+    recent: filtered.slice(-5).reverse(),
+  };
 }
