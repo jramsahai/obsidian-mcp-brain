@@ -16618,6 +16618,7 @@ MONTH_NAMES.forEach((name, i) => {
   MONTH_LOOKUP.set(name, i + 1);
   MONTH_LOOKUP.set(name.slice(0, 3), i + 1);
 });
+MONTH_LOOKUP.set("sept", 9);
 var MONTH_PATTERN = [...MONTH_LOOKUP.keys()].sort((a, b) => b.length - a.length).join("|");
 var MONTH_DAY_RE = new RegExp(`^(${MONTH_PATTERN}) (\\d{1,2})(?:st|nd|rd|th)?(?:,?\\s+(\\d{4}))?$`);
 var DAY_MONTH_RE = new RegExp(`^(\\d{1,2})(?:st|nd|rd|th)? (${MONTH_PATTERN})(?:,?\\s+(\\d{4}))?$`);
