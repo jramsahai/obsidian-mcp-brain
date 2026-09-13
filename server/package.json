@@ -9,7 +9,9 @@
     "test": "node --test test/*.test.ts",
     "check": "tsc --noEmit",
     "lint:vault": "node scripts/lint-vault-docs.ts",
-    "evals": "node evals/run.ts"
+    "evals": "node evals/run.ts",
+    "reject-rate": "node scripts/reject-rate.ts",
+    "calibrate": "node scripts/calibrate-similarity.ts"
   },
   "devDependencies": {
     "@modelcontextprotocol/sdk": "^1.30.0",

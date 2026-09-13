@@ -148,8 +148,8 @@ function cronJobs(): CronJob[] {
  * was clean. A run then followed it, found no CLI, and did nothing.
  */
 describe("cron job prompts", () => {
-  test("all three jobs are present", () => {
-    assert.equal(cronJobs().length, 3);
+  test("all jobs are present", () => {
+    assert.equal(cronJobs().length, 4);
   });
 
   test("no prompt names a tool or CLI verb that does not exist", () => {

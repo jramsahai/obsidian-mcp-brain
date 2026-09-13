@@ -99,6 +99,35 @@
         "obsidian__*"
       ],
       "message": "Run the user's weekly review by following the weekly-review skill exactly — it is the authoritative workflow: deriving this week's ISO week, what shipped and slipped, which projects went quiet, at most five observations, exactly three specific questions, applying any explicit answer from last week's review, and writing the review note with the Answers section left empty. Read the skill first at <skills-dir>/weekly-review/SKILL.md, and the shared conventions at <skills-dir>/second-brain/SKILL.md. All vault access is the obsidian__* MCP tools — there is no CLI and no shell fallback; if a tool errors, its message names the fix, so act on it or report plainly rather than finding another way in. Vault 'Obsidian Vault' at ~/Documents/Obsidian Vault/. Deliver the concise review to this channel. Read-mostly: do not mutate task or project state except to apply an explicit answer the user wrote in last week's review. If this message and the skill ever disagree, the skill wins."
+    },
+    {
+      "id": "<skill-tuning-job-id>",
+      "name": "Monthly Skill Tuning",
+      "agent": "vault",
+      "schedule": "0 9 1 * *",
+      "timezone": "America/New_York",
+      "tools": [
+        "read",
+        "image_generate",
+        "video_generate",
+        "get_goal",
+        "create_goal",
+        "update_goal",
+        "update_plan",
+        "sessions_list",
+        "sessions_history",
+        "sessions_send",
+        "sessions_spawn",
+        "sessions_yield",
+        "subagents",
+        "session_status",
+        "web_search",
+        "image",
+        "memory_search",
+        "memory_get",
+        "obsidian__*"
+      ],
+      "message": "Run the user's monthly skill-tuning pass by following the skill-tuning skill exactly — it is the authoritative workflow: read the Corrections log, the last four Reviews/ notes, and the Ignored Links rows added in the last month, cluster repeated corrections by skill and rule, and reply with at most three evidenced proposals (skill file, current wording, proposed wording, evidence with dates, what it does not change) or say plainly that nothing repeated. Read the skill first at <skills-dir>/skill-tuning/SKILL.md, and the shared conventions at <skills-dir>/second-brain/SKILL.md. All vault access is the obsidian__* MCP tools — there is no CLI and no shell fallback; if a tool errors, its message names the fix, so act on it or report plainly rather than finding another way in. Vault 'Obsidian Vault' at ~/Documents/Obsidian Vault/. Read-only: write nothing to the vault, and never apply a proposal yourself — proposals are applied by the user through a pull request that keeps npm test and the behavioral evals green. If this message and the skill ever disagree, the skill wins."
     }
   ]
 }
