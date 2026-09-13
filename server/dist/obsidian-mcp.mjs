@@ -16228,7 +16228,7 @@ function mergeDetail(existing, incoming) {
   return `${existing}; ${next}`;
 }
 
-// src/ignored.ts
+// src/corrections.ts
 import { existsSync, writeFileSync as writeFileSync2 } from "node:fs";
 
 // src/vault.ts
@@ -16444,13 +16444,69 @@ function writeNoteGuarded(relPath, expectedMtimeMs, content) {
   invalidateIndex();
 }
 
+// src/corrections.ts
+var CORRECTIONS_FILE = "Corrections.md";
+var CORRECTIONS_SECTION = "Log";
+function initialContent(date3 = today()) {
+  return [
+    "---",
+    "type: index",
+    `created: ${date3}`,
+    "---",
+    "",
+    "# Corrections",
+    "",
+    "Corrections the user made to the agent's work, kept so patterns can be counted later.",
+    "",
+    `## ${CORRECTIONS_SECTION}`,
+    "",
+    "| Date | Skill | What happened | What was wanted | Rule |",
+    "| --- | --- | --- | --- | --- |",
+    ""
+  ].join("\n");
+}
+function ensureCorrectionsLog() {
+  const full = absolutePath(CORRECTIONS_FILE);
+  if (existsSync(full)) return;
+  writeFileSync2(full, initialContent(), "utf8");
+  recordWrite(CORRECTIONS_FILE);
+  invalidateIndex();
+}
+function correctionRows() {
+  const note = getIndex().byPath.get(CORRECTIONS_FILE.normalize("NFC").toLowerCase());
+  if (!note) return [];
+  const { content } = readNote(note);
+  const section = findSection(content, CORRECTIONS_SECTION);
+  if (!section) return [];
+  const table = detectTable(content, section);
+  if (!table) return [];
+  const lines = content.split("\n");
+  const rows = [];
+  for (let i = table.headerLine + 2; i < section.end; i++) {
+    const line = lines[i];
+    if (!line?.trim().startsWith("|")) continue;
+    const cells = splitRow(line);
+    const date3 = (cells[0] ?? "").trim();
+    if (!date3) continue;
+    rows.push({
+      date: date3,
+      skill: (cells[1] ?? "").trim(),
+      did: (cells[2] ?? "").trim(),
+      wanted: (cells[3] ?? "").trim(),
+      rule: (cells[4] ?? "").trim()
+    });
+  }
+  return rows;
+}
+
 // src/ignored.ts
+import { existsSync as existsSync2, writeFileSync as writeFileSync3 } from "node:fs";
 var IGNORED_FILE = "Ignored Links.md";
 var IGNORED_SECTION = "Ignored";
 function plainText(value) {
   return value.replace(/\[\[([^\][\n]+)\]\]/g, (_, inner) => inner.split("|").pop().trim()).replace(/\s+/g, " ").replace(/\|/g, "/").trim();
 }
-function initialContent(date3 = today()) {
+function initialContent2(date3 = today()) {
   return [
     "---",
     "type: index",
@@ -16471,8 +16527,8 @@ function initialContent(date3 = today()) {
 }
 function ensureIgnoreList() {
   const full = absolutePath(IGNORED_FILE);
-  if (existsSync(full)) return;
-  writeFileSync2(full, initialContent(), "utf8");
+  if (existsSync2(full)) return;
+  writeFileSync3(full, initialContent2(), "utf8");
   recordWrite(IGNORED_FILE);
   invalidateIndex();
 }
@@ -16788,7 +16844,7 @@ function planLinkify(targets, entities) {
 }
 
 // src/notes.ts
-import { existsSync as existsSync2, mkdirSync, readFileSync as readFileSync2, writeFileSync as writeFileSync3 } from "node:fs";
+import { existsSync as existsSync3, mkdirSync, readFileSync as readFileSync2, writeFileSync as writeFileSync4 } from "node:fs";
 import { dirname as dirname2 } from "node:path";
 var NOTE_TYPES = [
   "project",
@@ -16801,7 +16857,8 @@ var NOTE_TYPES = [
   "moc",
   "shopping",
   "idea",
-  "index"
+  "index",
+  "review"
 ];
 var DAILY_SECTIONS = [
   "Mood / Energy",
@@ -16813,6 +16870,14 @@ var DAILY_SECTIONS = [
   "Random Thoughts"
 ];
 var SYNTHESIS_SECTIONS = ["Observations", "Changes Made Tonight", "Candidates"];
+var REVIEW_SECTIONS = [
+  "Shipped",
+  "Slipped",
+  "Quiet Projects",
+  "Observations",
+  "Questions for you",
+  "Answers"
+];
 var WIKILINK_LIST_KEYS = /* @__PURE__ */ new Set(["people", "projects"]);
 var PLAIN_LIST_KEYS = /* @__PURE__ */ new Set(["topics", "aliases", "tags"]);
 function buildNote(spec) {
@@ -17043,6 +17108,23 @@ function buildNote(spec) {
         body: spec.body
       });
     }
+    case "review": {
+      const week = requireIsoWeek(spec);
+      return assemble({
+        path: `Reviews/${week}.md`,
+        title: week,
+        type: "review",
+        heading: week,
+        frontmatter: [
+          ["type", "review"],
+          ["week", week],
+          ["created", created]
+        ],
+        sections: [...REVIEW_SECTIONS],
+        fields,
+        body: spec.body
+      });
+    }
   }
 }
 function requireName(spec, type) {
@@ -17109,6 +17191,23 @@ function requireTopic(spec) {
   if (bad !== void 0) {
     throw new ToolError(
       `topic "${raw}" is not a valid folder path \u2014 "${bad || "(empty)"}" is not a usable folder name. Use plain folder names, e.g. "Vehicles" or "Cycling/Repair".`
+    );
+  }
+  return raw;
+}
+var ISO_WEEK_RE = /^(\d{4})-W(\d{2})$/;
+function requireIsoWeek(spec) {
+  const raw = (spec.name ?? "").trim();
+  if (!raw) {
+    throw new ToolError(
+      'name is required for a review note \u2014 it is the ISO week the review covers, e.g. "2026-W37".'
+    );
+  }
+  const match = ISO_WEEK_RE.exec(raw);
+  const week = match ? Number(match[2]) : NaN;
+  if (!match || week < 1 || week > 53) {
+    throw new ToolError(
+      `name must be an ISO week in the form YYYY-Www, e.g. "2026-W37"; got "${raw}".`
     );
   }
   return raw;
@@ -17211,7 +17310,7 @@ function setFrontmatterField(content, key, value) {
 function createNote(spec) {
   const note = buildNote(spec);
   const full = absolutePath(note.path);
-  if (existsSync2(full)) {
+  if (existsSync3(full)) {
     const existing = readFileSync2(full, "utf8");
     if (existing.trim() !== "") {
       return {
@@ -17225,7 +17324,7 @@ function createNote(spec) {
     }
   }
   mkdirSync(dirname2(full), { recursive: true });
-  writeFileSync3(full, note.content, "utf8");
+  writeFileSync4(full, note.content, "utf8");
   recordWrite(note.path);
   invalidateIndex();
   return {
@@ -17239,7 +17338,7 @@ function createNote(spec) {
 function ensureDailyNote(date3) {
   assertDate(date3, "date");
   const result = createNote({ type: "daily", date: date3 });
-  if (!result.created && !existsSync2(absolutePath(result.path))) {
+  if (!result.created && !existsSync3(absolutePath(result.path))) {
     throw new ToolError(`could not create ${result.path}.`);
   }
   return result;
@@ -17573,7 +17672,7 @@ function resolveWritable(ref, options = {}) {
 }
 var vaultStatus = {
   name: "vault_status",
-  description: "Vault orientation in one call: today's local date, git dirty state, note counts by type, latest synthesis and daily note, unresolved/orphan link counts, and notes changed in the last 24 hours. Call this first in any standup or nightly run instead of exploring the vault by hand. git_error is non-null when git is enabled but unusable \u2014 snapshots will fail until it is fixed.",
+  description: "Vault orientation in one call: today's local date, git dirty state, note counts by type, latest synthesis, daily note, and review week, unresolved/orphan link counts, and notes changed in the last 24 hours. Call this first in any standup, weekly review, or nightly run instead of exploring the vault by hand. git_error is non-null when git is enabled but unusable \u2014 snapshots will fail until it is fixed.",
   inputSchema: { type: "object", properties: {}, additionalProperties: false },
   handler: () => {
     const cfg = config2();
@@ -17592,6 +17691,7 @@ var vaultStatus = {
     const gitError = gitDiagnosis();
     const usable = cfg.gitEnabled && gitError === null;
     const latestIn = (folder) => idx.notes.filter((n) => n.path.startsWith(`${folder}/`) && /\d{4}-\d{2}-\d{2}/.test(n.title)).map((n) => n.title).sort().pop() ?? null;
+    const lastReviewWeek = idx.notes.filter((n) => n.path.startsWith("Reviews/") && /^\d{4}-W\d{2}$/.test(n.title)).map((n) => n.title).sort().pop() ?? null;
     return {
       today: today(cfg),
       timezone: cfg.timezone,
@@ -17599,12 +17699,14 @@ var vaultStatus = {
       counts_by_type: counts,
       last_synthesis_date: latestIn("Syntheses"),
       last_daily_date: latestIn("Daily"),
+      last_review_week: lastReviewWeek,
       unresolved_count: graph.unresolved.size,
       // Retired candidates are withheld from unresolved but never from the
       // count: a suppression the caller cannot see is a suppression it cannot
       // audit. `vault_links direction="ignored"` lists them.
       ignored_count: graph.ignored.size,
       orphan_count: orphans.length,
+      corrections_count: correctionRows().length,
       changed_last_24h: changed,
       git_enabled: cfg.gitEnabled,
       // "off" and "on but broken" both used to report git_dirty: null, which
@@ -18280,11 +18382,11 @@ var noteCreate = {
       type: {
         type: "string",
         enum: [...NOTE_TYPES],
-        description: `project -> Projects/X/X.md; person -> People/First Last.md; meeting -> the project's Meeting Notes folder; doc -> the project's Docs folder, for drafts, research, and references; daily -> Daily/DATE.md; synthesis -> Syntheses/DATE.md; knowledge and moc -> Knowledge Base/TOPIC/; shopping -> Shopping/Store.md; idea -> Ideas/X.md; index -> a folder's own README, e.g. name="Knowledge Base" gives Knowledge Base/README.md.`
+        description: `project -> Projects/X/X.md; person -> People/First Last.md; meeting -> the project's Meeting Notes folder; doc -> the project's Docs folder, for drafts, research, and references; daily -> Daily/DATE.md; synthesis -> Syntheses/DATE.md; knowledge and moc -> Knowledge Base/TOPIC/; shopping -> Shopping/Store.md; idea -> Ideas/X.md; index -> a folder's own README, e.g. name="Knowledge Base" gives Knowledge Base/README.md; review -> Reviews/YYYY-Www.md, name is the ISO week e.g. "2026-W37".`
       },
       name: {
         type: "string",
-        description: "The plain name of the thing \u2014 project name, person's full name, store, idea, or knowledge note title. Not a path, not a generic name like Overview. Omit for daily and synthesis, which are named by date."
+        description: `The plain name of the thing \u2014 project name, person's full name, store, idea, or knowledge note title. Not a path, not a generic name like Overview. Omit for daily and synthesis, which are named by date. For type=review this is the ISO week, e.g. "2026-W37".`
       },
       project: {
         type: "string",
@@ -18334,7 +18436,8 @@ var APPLICABLE_ARGS = {
   moc: ["topic"],
   shopping: ["name"],
   idea: ["name"],
-  index: ["name"]
+  index: ["name"],
+  review: ["name"]
 };
 var ARG_HINT = {
   name: 'a moc is titled after its topic (e.g. "Cycling MOC"), and daily and synthesis notes are titled by date. Use type="knowledge" if you meant a note with its own name',
@@ -18898,6 +19001,109 @@ var linkIgnore = {
     return { path: note.path, target, added: true, ignored_total: ignoredRows().length };
   }
 };
+var KEBAB_CASE_RE = /^[a-z0-9]+(-[a-z0-9]+)*$/;
+var correctionLog = {
+  name: "correction_log",
+  description: "Record that the user corrected the agent, so the lesson survives past the fix. Log it first, then apply the fix \u2014 never re-litigate. Appends one row to Corrections.md, creating it on first use. An exact repeat of an existing row is skipped; two different corrections on the same day both land.",
+  inputSchema: {
+    type: "object",
+    properties: {
+      skill: {
+        type: "string",
+        description: 'The skill that was in play, kebab-case, e.g. "task-tracking".'
+      },
+      did: { type: "string", description: "What the agent did, in plain words." },
+      wanted: { type: "string", description: "What the user wanted instead, in plain words." },
+      rule: {
+        type: "string",
+        description: "The skill rule this bears on, in your own words. Optional."
+      },
+      date: { type: "string", description: "YYYY-MM-DD. Defaults to today in the vault's timezone." }
+    },
+    required: ["skill", "did", "wanted"],
+    additionalProperties: false
+  },
+  handler: (args) => {
+    const skill = plainText(req(args, "skill"));
+    const did = plainText(req(args, "did"));
+    const wanted = plainText(req(args, "wanted"));
+    const rule = str(args, "rule") ? plainText(req(args, "rule")) : "";
+    const date3 = str(args, "date") ? assertDate(req(args, "date"), "date") : today();
+    if (!KEBAB_CASE_RE.test(skill)) {
+      throw new ToolError(
+        `skill must be kebab-case (lowercase words joined with "-"), e.g. "task-tracking"; got "${skill}".`
+      );
+    }
+    if (!did) throw new ToolError("did is empty; say what the agent did.");
+    if (!wanted) throw new ToolError("wanted is empty; say what the user wanted instead.");
+    ensureCorrectionsLog();
+    const note = resolveNote(CORRECTIONS_FILE);
+    const current = readNote(note);
+    const result = appendToSection(
+      current.content,
+      CORRECTIONS_SECTION,
+      `| ${date3} | ${skill} | ${did} | ${wanted} | ${rule} |`,
+      {
+        dedupe: true,
+        notePath: note.path,
+        // The near-duplicate guard's row-key shortcut (similar.ts) treats a
+        // row's first cell as its identity and calls two rows "different
+        // subjects" the moment that cell differs. Every row here leads with
+        // the date, so two genuinely separate corrections logged the same day
+        // share that cell and the shortcut never fires for them — the guard
+        // would then fall through to plain wording overlap, which is exactly
+        // the false-positive risk of blocking a second, unrelated correction.
+        // The exact-repeat check just above this option runs regardless, so a
+        // true replay is still caught; allow_similar only waives the
+        // wording-overlap guess for the same-day case it cannot judge.
+        allowSimilar: true
+      }
+    );
+    if (!result.changed) {
+      return { path: note.path, logged: false, reason: result.reason };
+    }
+    writeNoteGuarded(note.path, current.mtimeMs, result.content);
+    return { path: note.path, logged: true, date: date3, skill };
+  }
+};
+var correctionsSummary = {
+  name: "corrections_summary",
+  description: "Summarize corrections logged with correction_log: total count, grouped by skill (with the rules each cites and how often), and the 5 most recent rows. Filter with since and/or skill. An empty or missing log returns zeros, not an error.",
+  inputSchema: {
+    type: "object",
+    properties: {
+      since: { type: "string", description: "YYYY-MM-DD. Only corrections on or after this date." },
+      skill: { type: "string", description: 'Limit to one skill, e.g. "task-tracking".' }
+    },
+    additionalProperties: false
+  },
+  handler: (args) => {
+    const since = str(args, "since") ? assertDate(req(args, "since"), "since") : void 0;
+    const skill = str(args, "skill");
+    let rows = correctionRows();
+    if (since) rows = rows.filter((r) => r.date >= since);
+    if (skill) rows = rows.filter((r) => r.skill.toLowerCase() === skill.toLowerCase());
+    const bySkill = /* @__PURE__ */ new Map();
+    for (const row of rows) {
+      const entry = bySkill.get(row.skill) ?? { count: 0, last_date: row.date, rules: /* @__PURE__ */ new Map() };
+      entry.count++;
+      if (row.date > entry.last_date) entry.last_date = row.date;
+      if (row.rule) entry.rules.set(row.rule, (entry.rules.get(row.rule) ?? 0) + 1);
+      bySkill.set(row.skill, entry);
+    }
+    const by_skill = [...bySkill.entries()].map(([skillName, entry]) => ({
+      skill: skillName,
+      count: entry.count,
+      last_date: entry.last_date,
+      rules: [...entry.rules.entries()].map(([rule, count]) => ({ rule, count })).sort((a, b) => b.count - a.count)
+    })).sort((a, b) => b.count - a.count);
+    return {
+      total: rows.length,
+      by_skill,
+      recent: rows.slice(-5).reverse()
+    };
+  }
+};
 var TOOLS = [
   vaultStatus,
   vaultList,
@@ -18914,6 +19120,8 @@ var TOOLS = [
   checklistSet,
   relate,
   linkIgnore,
+  correctionLog,
+  correctionsSummary,
   inboxRoute,
   linkify,
   noteSetField,

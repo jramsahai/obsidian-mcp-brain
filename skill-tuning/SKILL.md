@@ -20,7 +20,7 @@ Use `second-brain` for the shared tool surface and conventions.
 
 Everything here is read-only, through `obsidian__*` tools. A missing note is a normal outcome for all three — report it as "nothing recorded yet," not as a failure.
 
-- **Corrections log** — `obsidian__vault_read note="Corrections"`. A table shaped `| Date | Skill | What happened | What was wanted | Rule |`, written by another tool this skill does not call. If the read fails because the note does not exist, that means no correction has been logged yet; do not create the note and do not treat the error as a problem to report beyond that.
+- **Corrections log** — `obsidian__corrections_summary since="<first day of last month>"` gives the counts grouped by skill and rule plus the most recent rows; `obsidian__vault_read note="Corrections"` has the full table (`| Date | Skill | What happened | What was wanted | Rule |`) when a cluster needs its exact wording. A summary of zero means no correction has been logged yet; do not create the note.
 - **Recent reviews** — `obsidian__vault_list folder="Reviews"`. Results are sorted the way every `vault_list` call is: date-named notes come back oldest first, so the last four entries in the returned list are the four most recent. An empty result means no review notes exist yet.
 - **Retired link candidates** — `obsidian__vault_read note="Ignored Links"`, reading its `## Ignored` table (`| Target | Reason | Since |`). Keep only rows whose `Since` date falls within the last month. If the note does not exist, nothing has been retired yet.
 
